@@ -1,0 +1,73 @@
+# Railway Collector Configuration
+# Environment variables override YAML values.
+# Use RAILWAY_TOKEN env var or set railway.token below.
+# All RAILWAY_COLLECTOR_* env vars map to config keys (__ = nesting).
+# Example: RAILWAY_COLLECTOR_COLLECT__METRICS__INTERVAL=60s
+
+railway:
+  # API token (required). Supports account, workspace, or project tokens.
+  # Account tokens see all workspaces. Workspace tokens see one workspace.
+  token: ""
+  # Optional: restrict collection to a single workspace ID.
+  # workspace_id: ""
+
+collect:
+  metrics:
+    enabled: true
+    # How often to scrape metrics from Railway API.
+    interval: 30s
+    # Which measurements to collect.
+    # Options: cpu, cpu_limit, memory, memory_limit, network_rx, network_tx,
+    #          disk, ephemeral_disk, backup
+    measurements:
+      - cpu
+      - memory
+      - network_rx
+      - network_tx
+      - disk
+    # Resolution of metric data points (seconds).
+    sample_rate_seconds: 60
+    # Smoothing window for CPU metrics (seconds).
+    averaging_window_seconds: 60
+    # How far back each scrape looks. Should be >= interval.
+    lookback: 5m
+
+  logs:
+    enabled: true
+    # How often to poll for new logs.
+    interval: 15s
+    # Which log types to collect.
+    # Options: deployment, build, http
+    types:
+      - deployment
+      - build
+      - http
+    # Max log entries per query per deployment.
+    limit: 500
+
+  resources:
+    enabled: true
+    # How often to re-discover projects, services, environments.
+    interval: 5m
+
+# Filters control which Railway resources are collected.
+# Empty lists mean "collect everything". Entries can be exact names, IDs, or regex.
+filters:
+  projects: []
+  services: []
+  environments: []
+
+# Sinks define where collected data is sent.
+sinks:
+  prometheus:
+    enabled: true
+    # Address for the /metrics and /health endpoints.
+    listen: ":9106"
+
+  file:
+    enabled: false
+    # Path for JSON lines output (metrics + logs).
+    path: "./railway-collector.jsonl"
+
+# Log level for the collector itself: debug, info, warn, error.
+log_level: info

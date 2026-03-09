@@ -1,0 +1,17 @@
+schema: schema.graphql
+operations:
+  - queries.graphql
+generated: generated.go
+package: railway
+optional: pointer
+bindings:
+  DateTime:
+    type: string
+  DeploymentMeta:
+    type: any
+  JSON:
+    type: any
+  BigInt:
+    type: int64
+  Upload:
+    type: any

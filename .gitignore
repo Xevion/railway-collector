@@ -1,0 +1,18 @@
+# Binary
+collector
+
+# Environment
+.env
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output
+*.jsonl

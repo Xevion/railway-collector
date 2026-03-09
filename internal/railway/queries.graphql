@@ -1,0 +1,356 @@
+# Resource discovery queries
+
+query Me {
+  me {
+    id
+    name
+    email
+    workspaces {
+      id
+      name
+      createdAt
+    }
+  }
+}
+
+query Projects($workspaceId: String) {
+  projects(first: 250, workspaceId: $workspaceId) {
+    edges {
+      node {
+        id
+        name
+        description
+        createdAt
+        updatedAt
+        environments {
+          edges {
+            node {
+              id
+              name
+              isEphemeral
+            }
+          }
+        }
+        services {
+          edges {
+            node {
+              id
+              name
+              createdAt
+              updatedAt
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+query Deployments(
+  $projectId: String!
+  $environmentId: String!
+  $serviceId: String!
+  $first: Int
+  $after: String
+) {
+  deployments(
+    first: $first
+    after: $after
+    input: {
+      projectId: $projectId
+      environmentId: $environmentId
+      serviceId: $serviceId
+    }
+  ) {
+    edges {
+      node {
+        id
+        status
+        createdAt
+        updatedAt
+        staticUrl
+        url
+        meta
+        environmentId
+        serviceId
+        projectId
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+
+query ServiceInstanceQuery(
+  $environmentId: String!
+  $serviceId: String!
+) {
+  serviceInstance(
+    environmentId: $environmentId
+    serviceId: $serviceId
+  ) {
+    id
+    serviceId
+    serviceName
+    environmentId
+    startCommand
+    buildCommand
+    healthcheckPath
+    healthcheckTimeout
+    region
+    numReplicas
+    restartPolicyType
+    restartPolicyMaxRetries
+    cronSchedule
+    sleepApplication
+    builder
+    domains {
+      customDomains {
+        id
+        domain
+      }
+      serviceDomains {
+        id
+        domain
+      }
+    }
+  }
+}
+
+# Metrics queries
+
+query Metrics(
+  $projectId: String
+  $serviceId: String
+  $environmentId: String
+  $startDate: DateTime!
+  $endDate: DateTime
+  $measurements: [MetricMeasurement!]!
+  $groupBy: [MetricTag!]
+  $sampleRateSeconds: Int
+  $averagingWindowSeconds: Int
+) {
+  metrics(
+    projectId: $projectId
+    serviceId: $serviceId
+    environmentId: $environmentId
+    startDate: $startDate
+    endDate: $endDate
+    measurements: $measurements
+    groupBy: $groupBy
+    sampleRateSeconds: $sampleRateSeconds
+    averagingWindowSeconds: $averagingWindowSeconds
+  ) {
+    measurement
+    tags {
+      projectId
+      serviceId
+      environmentId
+      deploymentId
+      deploymentInstanceId
+      region
+    }
+    values {
+      ts
+      value
+    }
+  }
+}
+
+query Usage(
+  $projectId: String
+  $workspaceId: String
+  $measurements: [MetricMeasurement!]!
+  $groupBy: [MetricTag!]
+  $startDate: DateTime
+  $endDate: DateTime
+) {
+  usage(
+    projectId: $projectId
+    workspaceId: $workspaceId
+    measurements: $measurements
+    groupBy: $groupBy
+    startDate: $startDate
+    endDate: $endDate
+  ) {
+    measurement
+    tags {
+      projectId
+      serviceId
+      environmentId
+    }
+    value
+  }
+}
+
+query EstimatedUsage(
+  $projectId: String
+  $workspaceId: String
+  $measurements: [MetricMeasurement!]!
+) {
+  estimatedUsage(
+    projectId: $projectId
+    workspaceId: $workspaceId
+    measurements: $measurements
+  ) {
+    estimatedValue
+    measurement
+    projectId
+  }
+}
+
+# Log queries
+
+query DeploymentLogsQuery(
+  $deploymentId: String!
+  $limit: Int
+  $startDate: DateTime
+  $endDate: DateTime
+  $filter: String
+) {
+  deploymentLogs(
+    deploymentId: $deploymentId
+    limit: $limit
+    startDate: $startDate
+    endDate: $endDate
+    filter: $filter
+  ) {
+    timestamp
+    message
+    severity
+    attributes {
+      key
+      value
+    }
+    tags {
+      deploymentId
+      deploymentInstanceId
+      serviceId
+      projectId
+      environmentId
+    }
+  }
+}
+
+query BuildLogsQuery(
+  $deploymentId: String!
+  $limit: Int
+  $startDate: DateTime
+  $endDate: DateTime
+  $filter: String
+) {
+  buildLogs(
+    deploymentId: $deploymentId
+    limit: $limit
+    startDate: $startDate
+    endDate: $endDate
+    filter: $filter
+  ) {
+    timestamp
+    message
+    severity
+    attributes {
+      key
+      value
+    }
+    tags {
+      deploymentId
+      deploymentInstanceId
+      serviceId
+      projectId
+      environmentId
+    }
+  }
+}
+
+query HttpLogsQuery(
+  $deploymentId: String!
+  $limit: Int
+  $startDate: String
+  $endDate: String
+  $filter: String
+) {
+  httpLogs(
+    deploymentId: $deploymentId
+    limit: $limit
+    startDate: $startDate
+    endDate: $endDate
+    filter: $filter
+  ) {
+    timestamp
+    requestId
+    method
+    path
+    host
+    httpStatus
+    totalDuration
+    upstreamRqDuration
+    srcIp
+    clientUa
+    rxBytes
+    txBytes
+    edgeRegion
+    deploymentId
+    deploymentInstanceId
+    downstreamProto
+    upstreamProto
+    upstreamAddress
+    responseDetails
+    upstreamErrors
+  }
+}
+
+query EnvironmentLogsQuery(
+  $environmentId: String!
+  $filter: String
+  $afterDate: String
+  $beforeDate: String
+  $afterLimit: Int
+  $beforeLimit: Int
+  $anchorDate: String
+) {
+  environmentLogs(
+    environmentId: $environmentId
+    filter: $filter
+    afterDate: $afterDate
+    beforeDate: $beforeDate
+    afterLimit: $afterLimit
+    beforeLimit: $beforeLimit
+    anchorDate: $anchorDate
+  ) {
+    timestamp
+    message
+    severity
+    attributes {
+      key
+      value
+    }
+    tags {
+      deploymentId
+      deploymentInstanceId
+      serviceId
+      projectId
+      environmentId
+    }
+  }
+}
+
+# Infrastructure queries
+
+query TcpProxiesQuery($environmentId: String!, $serviceId: String!) {
+  tcpProxies(
+    environmentId: $environmentId
+    serviceId: $serviceId
+  ) {
+    id
+    domain
+    proxyPort
+    applicationPort
+    environmentId
+    serviceId
+    createdAt
+    updatedAt
+  }
+}
