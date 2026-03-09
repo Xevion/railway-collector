@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,8 +13,11 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/lmittmann/tint"
+	slogformatter "github.com/samber/slog-formatter"
 	"github.com/xevion/railway-collector/internal/collector"
 	"github.com/xevion/railway-collector/internal/config"
+	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
 	"github.com/xevion/railway-collector/internal/state"
@@ -34,6 +38,8 @@ func main() {
 
 	level := slog.LevelInfo
 	switch cfg.LogLevel {
+	case "trace":
+		level = logging.LevelTrace
 	case "debug":
 		level = slog.LevelDebug
 	case "warn":
@@ -41,7 +47,30 @@ func main() {
 	case "error":
 		level = slog.LevelError
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	// Build handler chain: base → slog-formatter → filtering
+	var baseHandler slog.Handler
+	if os.Getenv("LOG_JSON") == "true" {
+		baseHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	} else {
+		baseHandler = tint.NewHandler(os.Stderr, &tint.Options{
+			Level:       level,
+			TimeFormat:  time.TimeOnly,
+			ReplaceAttr: logging.ReplaceAttrFunc,
+		})
+	}
+
+	formatted := slogformatter.NewFormatterHandler(logging.Formatters()...)(baseHandler)
+	handler := logging.NewFilteringHandler(formatted,
+		"Unsolicited response received on idle HTTP channel",
+	)
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
+	// Route stdlib log.Print (from net/http, etc.) through slog at WARN
+	slog.SetLogLoggerLevel(slog.LevelWarn)
+	_ = log.Default()
 
 	// Rate limit: ~2 RPS keeps us well within Hobby plan (1000 RPH ~ 16.6 RPM)
 	client := railway.NewClient(cfg.Railway.Token, 2.0, logger)

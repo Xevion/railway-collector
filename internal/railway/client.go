@@ -57,14 +57,12 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 	t.trackHeaders(resp)
 
-	// Handle 429: parse actual wait time, block, then retry once.
+	// Handle 429: parse wait time, update state, return response.
+	// The retry happens at the Client.wait() level, not here --
+	// sleeping inside RoundTrip would exceed http.Client.Timeout.
 	if resp.StatusCode == 429 {
 		wait := t.parseRetryWait(resp)
-		t.logger.Warn("rate limited by Railway API, waiting for reset",
-			"wait", wait.Round(time.Second),
-			"reset_at", time.Now().Add(wait).Format(time.RFC3339))
 
-		// Update resetAt so other goroutines also block via wait()
 		t.mu.Lock()
 		newReset := time.Now().Add(wait)
 		if newReset.After(t.resetAt) {
@@ -74,24 +72,9 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		t.initialized = true
 		t.mu.Unlock()
 
-		// Block until reset, then retry the request once
-		resp.Body.Close()
-		time.Sleep(wait)
-
-		if req.GetBody != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return nil, err
-			}
-			req.Body = body
-		}
-
-		resp, err = t.inner.RoundTrip(req)
-		if err != nil {
-			return resp, err
-		}
-		t.trackHeaders(resp)
-		return resp, nil
+		t.logger.Warn("rate limited by Railway API",
+			"wait", wait.Round(time.Second),
+			"reset_at", newReset.Format(time.RFC3339))
 	}
 
 	return resp, nil
@@ -201,7 +184,7 @@ func NewClient(token string, rps float64, logger *slog.Logger) *Client {
 // wait blocks until it's safe to make a request. Checks both the token bucket
 // (RPS smoothing) and the API's hourly rate limit (remaining/resetAt).
 func (c *Client) wait(ctx context.Context) error {
-	// Check API rate limit gate first
+	// Check API rate limit gate
 	remaining, resetAt, initialized := c.transport.getRateLimitState()
 	if initialized && remaining <= 0 && time.Now().Before(resetAt) {
 		waitDur := time.Until(resetAt)
@@ -224,6 +207,41 @@ func (c *Client) wait(ctx context.Context) error {
 	return nil
 }
 
+// do executes fn with wait+retry. If fn returns a 429-related error,
+// wait blocks until reset and retries once.
+func do[T any](c *Client, ctx context.Context, method string, fn func() (T, error)) (T, error) {
+	if err := c.wait(ctx); err != nil {
+		var zero T
+		return zero, err
+	}
+
+	result, err := fn()
+	if err == nil {
+		return result, nil
+	}
+
+	// Check if transport detected a 429 during this call
+	limited, _ := c.IsRateLimited()
+	if !limited {
+		return result, c.wrapError(method, err)
+	}
+
+	// wrapError updates state from the error message
+	c.wrapError(method, err)
+
+	// Block until reset, then retry once
+	if waitErr := c.wait(ctx); waitErr != nil {
+		var zero T
+		return zero, waitErr
+	}
+
+	result, err = fn()
+	if err != nil {
+		return result, c.wrapError(method, err)
+	}
+	return result, nil
+}
+
 // IsRateLimited returns true if the API rate limit is exhausted, along with
 // the time until reset. Used by the collection loop circuit breaker.
 func (c *Client) IsRateLimited() (bool, time.Duration) {
@@ -242,110 +260,65 @@ func (c *Client) RateLimitInfo() (remaining int, resetAt time.Time) {
 
 // Me returns the authenticated user info.
 func (c *Client) Me(ctx context.Context) (*MeResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := Me(ctx, c.gql)
-	if err != nil {
-		return nil, c.wrapError("Me", err)
-	}
-	return resp, nil
+	return do(c, ctx, "Me", func() (*MeResponse, error) {
+		return Me(ctx, c.gql)
+	})
 }
 
 // GetProjects returns all projects, optionally filtered by workspace.
 func (c *Client) GetProjects(ctx context.Context, workspaceID *string) (*ProjectsResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := Projects(ctx, c.gql, workspaceID)
-	if err != nil {
-		return nil, c.wrapError("GetProjects", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetProjects", func() (*ProjectsResponse, error) {
+		return Projects(ctx, c.gql, workspaceID)
+	})
 }
 
 // GetDeployments returns deployments for a service in an environment.
 func (c *Client) GetDeployments(ctx context.Context, projectID, envID, serviceID string, first *int, after *string) (*DeploymentsResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := Deployments(ctx, c.gql, projectID, envID, serviceID, first, after)
-	if err != nil {
-		return nil, c.wrapError("GetDeployments", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetDeployments", func() (*DeploymentsResponse, error) {
+		return Deployments(ctx, c.gql, projectID, envID, serviceID, first, after)
+	})
 }
 
 // GetServiceInstance returns the service instance config.
 func (c *Client) GetServiceInstance(ctx context.Context, envID, serviceID string) (*ServiceInstanceQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := ServiceInstanceQuery(ctx, c.gql, envID, serviceID)
-	if err != nil {
-		return nil, c.wrapError("GetServiceInstance", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetServiceInstance", func() (*ServiceInstanceQueryResponse, error) {
+		return ServiceInstanceQuery(ctx, c.gql, envID, serviceID)
+	})
 }
 
 // GetMetrics returns time-series metrics.
 func (c *Client) GetMetrics(ctx context.Context, projectID, serviceID, envID *string, startDate string, endDate *string, measurements []MetricMeasurement, groupBy []MetricTag, sampleRate, avgWindow *int) (*MetricsResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
-	if err != nil {
-		return nil, c.wrapError("GetMetrics", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetMetrics", func() (*MetricsResponse, error) {
+		return Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
+	})
 }
 
 // GetDeploymentLogs returns runtime logs for a deployment.
 func (c *Client) GetDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*DeploymentLogsQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := DeploymentLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	if err != nil {
-		return nil, c.wrapError("GetDeploymentLogs", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetDeploymentLogs", func() (*DeploymentLogsQueryResponse, error) {
+		return DeploymentLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	})
 }
 
 // GetBuildLogs returns build logs for a deployment.
 func (c *Client) GetBuildLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*BuildLogsQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := BuildLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	if err != nil {
-		return nil, c.wrapError("GetBuildLogs", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetBuildLogs", func() (*BuildLogsQueryResponse, error) {
+		return BuildLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	})
 }
 
 // GetHttpLogs returns HTTP access logs for a deployment.
 func (c *Client) GetHttpLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*HttpLogsQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	if err != nil {
-		return nil, c.wrapError("GetHttpLogs", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetHttpLogs", func() (*HttpLogsQueryResponse, error) {
+		return HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	})
 }
 
 // GetEnvironmentLogs returns runtime logs for an entire environment (all services).
 func (c *Client) GetEnvironmentLogs(ctx context.Context, environmentID string, filter *string, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*EnvironmentLogsQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := EnvironmentLogsQuery(ctx, c.gql, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
-	if err != nil {
-		return nil, c.wrapError("GetEnvironmentLogs", err)
-	}
-	return resp, nil
+	return do(c, ctx, "GetEnvironmentLogs", func() (*EnvironmentLogsQueryResponse, error) {
+		return EnvironmentLogsQuery(ctx, c.gql, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
+	})
 }
 
 // wrapError checks if a GraphQL error contains a 429 status and updates rate
