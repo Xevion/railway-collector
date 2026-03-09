@@ -8,19 +8,21 @@ Collects metrics and logs from [Railway](https://railway.com) via their GraphQL 
 # Set your Railway API token
 export RAILWAY_TOKEN=your-token-here
 
-# Build and run
+# Build
 go build -o collector ./cmd/collector
+
+# Run — loads config.yaml from the working directory automatically if present
 ./collector
 
-# Or with a config file
-./collector -config config.example.yaml
+# Or point at a different config file
+./collector -config /path/to/config.yaml
 ```
 
 Metrics are exposed at `http://localhost:9106/metrics` by default.
 
 ## Configuration
 
-Copy `config.example.yaml` and edit to taste. All config values can be overridden with environment variables:
+Copy `config.example.yaml` to `config.yaml` and edit to taste. The collector loads `config.yaml` from the working directory automatically; use `-config` to specify a different path. All config values can also be overridden with environment variables:
 
 | Env Var | Description |
 |---------|-------------|

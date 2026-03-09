@@ -162,7 +162,7 @@ func significantChange(a, b time.Duration) bool {
 }
 
 func main() {
-	configPath := flag.String("config", "", "path to config YAML file")
+	configPath := flag.String("config", "", "path to config YAML file (default: config.yaml in working directory)")
 	flag.Parse()
 
 	// Load .env from cwd if present (errors ignored -- file is optional)

@@ -158,9 +158,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("loading defaults: %w", err)
 	}
 
-	// Load YAML file if provided
-	if path != "" {
-		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+	// Load YAML config: use the provided path, or fall back to "config.yaml" in the
+	// working directory. A missing default file is silently ignored; a missing
+	// explicitly-provided file is always an error.
+	usingDefault := path == ""
+	if usingDefault {
+		path = "config.yaml"
+	}
+	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+		if !usingDefault || !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("loading config file %s: %w", path, err)
 		}
 	}
