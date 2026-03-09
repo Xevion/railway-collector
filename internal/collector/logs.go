@@ -61,13 +61,6 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 			continue
 		}
 
-		startDate := lc.getLastSeen(target.DeploymentID)
-		var startDateStr *string
-		if !startDate.IsZero() {
-			s := startDate.Format(time.RFC3339Nano)
-			startDateStr = &s
-		}
-
 		baseLabels := map[string]string{
 			"project_id":       target.ProjectID,
 			"project_name":     target.ProjectName,
@@ -79,6 +72,12 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		}
 
 		if lc.types["deployment"] {
+			startDate := lc.getLastSeen(target.DeploymentID, "deployment")
+			var startDateStr *string
+			if !startDate.IsZero() {
+				s := startDate.Format(time.RFC3339Nano)
+				startDateStr = &s
+			}
 			logs, err := lc.collectDeploymentLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
 			if err != nil {
 				lc.logger.Error("failed to collect deployment logs", "deployment", target.DeploymentID, "error", err)
@@ -88,6 +87,12 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		}
 
 		if lc.types["build"] {
+			startDate := lc.getLastSeen(target.DeploymentID, "build")
+			var startDateStr *string
+			if !startDate.IsZero() {
+				s := startDate.Format(time.RFC3339Nano)
+				startDateStr = &s
+			}
 			logs, err := lc.collectBuildLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
 			if err != nil {
 				lc.logger.Debug("failed to collect build logs", "deployment", target.DeploymentID, "error", err)
@@ -97,6 +102,12 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		}
 
 		if lc.types["http"] {
+			startDate := lc.getLastSeen(target.DeploymentID, "http")
+			var startDateStr *string
+			if !startDate.IsZero() {
+				s := startDate.Format(time.RFC3339Nano)
+				startDateStr = &s
+			}
 			logs, err := lc.collectHttpLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
 			if err != nil {
 				lc.logger.Debug("failed to collect HTTP logs", "deployment", target.DeploymentID, "error", err)
@@ -131,7 +142,11 @@ func (lc *LogsCollector) collectDeploymentLogs(ctx context.Context, deploymentID
 	var maxTS time.Time
 
 	for _, log := range resp.DeploymentLogs {
-		ts, _ := time.Parse(time.RFC3339Nano, log.Timestamp)
+		ts, err := time.Parse(time.RFC3339Nano, log.Timestamp)
+		if err != nil {
+			lc.logger.Warn("skipping deployment log with unparseable timestamp", "timestamp", log.Timestamp, "error", err)
+			continue
+		}
 
 		labels := copyLabels(baseLabels)
 		labels["log_type"] = "deployment"
@@ -160,7 +175,7 @@ func (lc *LogsCollector) collectDeploymentLogs(ctx context.Context, deploymentID
 	}
 
 	if !maxTS.IsZero() {
-		lc.setLastSeen(deploymentID, maxTS)
+		lc.setLastSeen(deploymentID, "deployment", maxTS)
 	}
 
 	return entries, nil
@@ -173,8 +188,14 @@ func (lc *LogsCollector) collectBuildLogs(ctx context.Context, deploymentID stri
 	}
 
 	var entries []sink.LogEntry
+	var maxTS time.Time
+
 	for _, log := range resp.BuildLogs {
-		ts, _ := time.Parse(time.RFC3339Nano, log.Timestamp)
+		ts, err := time.Parse(time.RFC3339Nano, log.Timestamp)
+		if err != nil {
+			lc.logger.Warn("skipping build log with unparseable timestamp", "timestamp", log.Timestamp, "error", err)
+			continue
+		}
 
 		labels := copyLabels(baseLabels)
 		labels["log_type"] = "build"
@@ -196,6 +217,14 @@ func (lc *LogsCollector) collectBuildLogs(ctx context.Context, deploymentID stri
 			Labels:     labels,
 			Attributes: attrs,
 		})
+
+		if ts.After(maxTS) {
+			maxTS = ts
+		}
+	}
+
+	if !maxTS.IsZero() {
+		lc.setLastSeen(deploymentID, "build", maxTS)
 	}
 
 	return entries, nil
@@ -209,8 +238,14 @@ func (lc *LogsCollector) collectHttpLogs(ctx context.Context, deploymentID strin
 	}
 
 	var entries []sink.LogEntry
+	var maxTS time.Time
+
 	for _, log := range resp.HttpLogs {
-		ts, _ := time.Parse(time.RFC3339Nano, log.Timestamp)
+		ts, err := time.Parse(time.RFC3339Nano, log.Timestamp)
+		if err != nil {
+			lc.logger.Warn("skipping http log with unparseable timestamp", "timestamp", log.Timestamp, "error", err)
+			continue
+		}
 
 		labels := copyLabels(baseLabels)
 		labels["log_type"] = "http"
@@ -244,22 +279,31 @@ func (lc *LogsCollector) collectHttpLogs(ctx context.Context, deploymentID strin
 			Labels:     labels,
 			Attributes: attrs,
 		})
+
+		if ts.After(maxTS) {
+			maxTS = ts
+		}
+	}
+
+	if !maxTS.IsZero() {
+		lc.setLastSeen(deploymentID, "http", maxTS)
 	}
 
 	return entries, nil
 }
 
-func (lc *LogsCollector) getLastSeen(deploymentID string) time.Time {
+func (lc *LogsCollector) getLastSeen(deploymentID, logType string) time.Time {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-	return lc.lastSeenLog[deploymentID]
+	return lc.lastSeenLog[deploymentID+":"+logType]
 }
 
-func (lc *LogsCollector) setLastSeen(deploymentID string, ts time.Time) {
+func (lc *LogsCollector) setLastSeen(deploymentID, logType string, ts time.Time) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-	if existing, ok := lc.lastSeenLog[deploymentID]; !ok || ts.After(existing) {
-		lc.lastSeenLog[deploymentID] = ts
+	key := deploymentID + ":" + logType
+	if existing, ok := lc.lastSeenLog[key]; !ok || ts.After(existing) {
+		lc.lastSeenLog[key] = ts
 	}
 }
 

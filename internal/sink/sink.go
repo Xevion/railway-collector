@@ -23,20 +23,6 @@ type LogEntry struct {
 	Attributes map[string]string
 }
 
-// DeploymentInfo represents deployment metadata for resource-level metrics.
-type DeploymentInfo struct {
-	ID              string
-	Status          string
-	ProjectID       string
-	ProjectName     string
-	ServiceID       string
-	ServiceName     string
-	EnvironmentID   string
-	EnvironmentName string
-	CreatedAt       time.Time
-	URL             string
-}
-
 // Sink is the interface that all metric/log backends implement.
 type Sink interface {
 	// Name returns the sink's display name.

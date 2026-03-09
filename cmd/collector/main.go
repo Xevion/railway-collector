@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -76,7 +77,7 @@ func main() {
 	}
 
 	// Initialize discovery
-	discovery := collector.NewDiscovery(client, cfg.Filters, logger)
+	discovery := collector.NewDiscovery(client, cfg.Filters, cfg.Railway.WorkspaceID, logger)
 	if err := discovery.Refresh(ctx); err != nil {
 		logger.Error("initial discovery failed", "error", err)
 		os.Exit(1)
@@ -115,19 +116,45 @@ func main() {
 		"targets", len(discovery.Targets()),
 	)
 
-	// Collection loop
-	metricsTicker := time.NewTicker(cfg.Collect.Metrics.Interval)
-	logsTicker := time.NewTicker(cfg.Collect.Logs.Interval)
-	discoveryTicker := time.NewTicker(cfg.Collect.Resources.Interval)
-	defer metricsTicker.Stop()
-	defer logsTicker.Stop()
-	defer discoveryTicker.Stop()
+	// Collection loop — only create tickers for enabled collectors;
+	// nil channels block forever in select, effectively disabling that case.
+	var metricsCh <-chan time.Time
+	if metricsCollector != nil {
+		t := time.NewTicker(cfg.Collect.Metrics.Interval)
+		defer t.Stop()
+		metricsCh = t.C
+	}
+	var logsCh <-chan time.Time
+	if logsCollector != nil {
+		t := time.NewTicker(cfg.Collect.Logs.Interval)
+		defer t.Stop()
+		logsCh = t.C
+	}
+	var discoveryCh <-chan time.Time
+	if cfg.Collect.Resources.Enabled {
+		t := time.NewTicker(cfg.Collect.Resources.Interval)
+		defer t.Stop()
+		discoveryCh = t.C
+	}
+
+	var wg sync.WaitGroup
 
 	// Collect immediately on start
 	if metricsCollector != nil {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			if err := metricsCollector.Collect(ctx); err != nil {
 				logger.Error("initial metrics collection failed", "error", err)
+			}
+		}()
+	}
+	if logsCollector != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := logsCollector.Collect(ctx); err != nil {
+				logger.Error("initial logs collection failed", "error", err)
 			}
 		}()
 	}
@@ -135,8 +162,22 @@ func main() {
 	for {
 		select {
 		case <-sigCh:
-			logger.Info("shutting down")
+			logger.Info("shutting down, waiting for in-flight collections...")
 			cancel()
+
+			// Wait for in-flight goroutines with a timeout
+			done := make(chan struct{})
+			go func() {
+				wg.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				logger.Debug("all collections drained")
+			case <-time.After(10 * time.Second):
+				logger.Warn("timed out waiting for in-flight collections")
+			}
+
 			for _, s := range sinks {
 				if err := s.Close(); err != nil {
 					logger.Error("failed to close sink", "sink", s.Name(), "error", err)
@@ -144,26 +185,32 @@ func main() {
 			}
 			return
 
-		case <-metricsTicker.C:
-			if metricsCollector != nil {
+		case <-metricsCh:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				if err := metricsCollector.Collect(ctx); err != nil {
 					logger.Error("metrics collection failed", "error", err)
 				}
-			}
+			}()
 
-		case <-logsTicker.C:
-			if logsCollector != nil {
+		case <-logsCh:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				if err := logsCollector.Collect(ctx); err != nil {
 					logger.Error("logs collection failed", "error", err)
 				}
-			}
+			}()
 
-		case <-discoveryTicker.C:
-			if cfg.Collect.Resources.Enabled {
+		case <-discoveryCh:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				if err := discovery.Refresh(ctx); err != nil {
 					logger.Error("discovery refresh failed", "error", err)
 				}
-			}
+			}()
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -103,7 +104,10 @@ func (s *PrometheusSink) getOrCreateGauge(name string, labels map[string]string)
 		Help: fmt.Sprintf("Railway metric: %s", name),
 	}, labelNames)
 
-	s.registry.MustRegister(g)
+	if err := s.registry.Register(g); err != nil {
+		s.logger.Warn("failed to register metric", "name", name, "error", err)
+		return g
+	}
 	s.gauges[cacheKey] = g
 	return g
 }
@@ -122,11 +126,6 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	// Simple insertion sort — label sets are small
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	slices.Sort(keys)
 	return keys
 }

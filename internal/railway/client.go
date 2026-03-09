@@ -62,9 +62,55 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 	}
 
-	if resp.StatusCode == 429 {
-		retryAfter := resp.Header.Get("Retry-After")
-		t.logger.Warn("rate limited by Railway API", "retry_after", retryAfter)
+	const maxRetries = 3
+	for attempt := 0; resp.StatusCode == 429 && attempt < maxRetries; attempt++ {
+		// Parse Retry-After header; default to 5s
+		wait := 5 * time.Second
+		if v := resp.Header.Get("Retry-After"); v != "" {
+			if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+				wait = time.Duration(secs) * time.Second
+			}
+		}
+
+		t.logger.Warn("rate limited by Railway API, retrying",
+			"retry_after", wait, "attempt", attempt+1, "max_retries", maxRetries)
+
+		resp.Body.Close()
+
+		// Ensure we can re-read the request body
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("getting request body for retry: %w", err)
+			}
+			req.Body = body
+		} else if req.Body != nil {
+			// Body was consumed and can't be re-created
+			return nil, fmt.Errorf("cannot retry request: GetBody is nil and body was consumed")
+		}
+
+		time.Sleep(wait)
+
+		resp, err = t.inner.RoundTrip(req)
+		if err != nil {
+			return resp, err
+		}
+
+		// Re-track rate limit headers on retry response
+		if v := resp.Header.Get("X-RateLimit-Remaining"); v != "" {
+			if remaining, err := strconv.Atoi(v); err == nil {
+				t.mu.Lock()
+				t.remaining = remaining
+				t.mu.Unlock()
+			}
+		}
+		if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
+			if resetUnix, err := strconv.ParseInt(v, 10, 64); err == nil {
+				t.mu.Lock()
+				t.resetAt = time.Unix(resetUnix, 0)
+				t.mu.Unlock()
+			}
+		}
 	}
 
 	return resp, nil
@@ -142,22 +188,6 @@ func (c *Client) GetMetrics(ctx context.Context, projectID, serviceID, envID *st
 	return Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
 }
 
-// GetUsage returns aggregated usage.
-func (c *Client) GetUsage(ctx context.Context, projectID, workspaceID *string, measurements []MetricMeasurement, groupBy []MetricTag, startDate, endDate *string) (*UsageResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	return Usage(ctx, c.gql, projectID, workspaceID, measurements, groupBy, startDate, endDate)
-}
-
-// GetEstimatedUsage returns estimated billing.
-func (c *Client) GetEstimatedUsage(ctx context.Context, projectID, workspaceID *string, measurements []MetricMeasurement) (*EstimatedUsageResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	return EstimatedUsage(ctx, c.gql, projectID, workspaceID, measurements)
-}
-
 // GetDeploymentLogs returns runtime logs for a deployment.
 func (c *Client) GetDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*DeploymentLogsQueryResponse, error) {
 	if err := c.wait(ctx); err != nil {
@@ -180,24 +210,4 @@ func (c *Client) GetHttpLogs(ctx context.Context, deploymentID string, limit *in
 		return nil, err
 	}
 	return HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-}
-
-// GetEnvironmentLogs returns all logs for an environment.
-func (c *Client) GetEnvironmentLogs(ctx context.Context, envID string, filter, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*EnvironmentLogsQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	return EnvironmentLogsQuery(ctx, c.gql, envID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
-}
-
-// GetTcpProxies returns TCP proxies for a service.
-func (c *Client) GetTcpProxies(ctx context.Context, envID, serviceID string) (*TcpProxiesQueryResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := TcpProxiesQuery(ctx, c.gql, envID, serviceID)
-	if err != nil {
-		return nil, fmt.Errorf("querying TCP proxies: %w", err)
-	}
-	return resp, nil
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
 )
 
@@ -114,8 +115,10 @@ func DefaultConfig() *Config {
 func Load(path string) (*Config, error) {
 	k := koanf.New(".")
 
-	// Load defaults by marshaling the default config
-	cfg := DefaultConfig()
+	// Load defaults into koanf first so YAML/env layers merge on top
+	if err := k.Load(structs.Provider(*DefaultConfig(), "koanf"), nil); err != nil {
+		return nil, fmt.Errorf("loading defaults: %w", err)
+	}
 
 	// Load YAML file if provided
 	if path != "" {
@@ -153,7 +156,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("loading LOG_LEVEL: %w", err)
 	}
 
-	if err := k.Unmarshal("", cfg); err != nil {
+	var cfg Config
+	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
 
@@ -161,5 +165,5 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("railway token is required (set railway.token in config or RAILWAY_TOKEN env var)")
 	}
 
-	return cfg, nil
+	return &cfg, nil
 }
