@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
+	"github.com/xevion/railway-collector/internal/state"
 )
 
 type LogsCollector struct {
@@ -18,9 +18,7 @@ type LogsCollector struct {
 	types     map[string]bool
 	limit     int
 	logger    *slog.Logger
-
-	mu          sync.Mutex
-	lastSeenLog map[string]time.Time
+	store     *state.Store
 }
 
 func NewLogsCollector(
@@ -29,6 +27,7 @@ func NewLogsCollector(
 	sinks []sink.Sink,
 	types []string,
 	limit int,
+	store *state.Store,
 	logger *slog.Logger,
 ) *LogsCollector {
 	typeSet := make(map[string]bool, len(types))
@@ -37,13 +36,13 @@ func NewLogsCollector(
 	}
 
 	return &LogsCollector{
-		client:      client,
-		discovery:   discovery,
-		sinks:       sinks,
-		types:       typeSet,
-		limit:       limit,
-		logger:      logger,
-		lastSeenLog: make(map[string]time.Time),
+		client:    client,
+		discovery: discovery,
+		sinks:     sinks,
+		types:     typeSet,
+		limit:     limit,
+		store:     store,
+		logger:    logger,
 	}
 }
 
@@ -56,6 +55,43 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 	var allLogs []sink.LogEntry
 	limit := lc.limit
 
+	// Phase 1: Environment logs — one API call per unique environment instead
+	// of one per deployment. This is the main source of API call savings.
+	if lc.types["deployment"] {
+		// Group targets by environment ID so we can look up labels by service ID.
+		type envGroup struct {
+			environmentID   string
+			environmentName string
+			// serviceID -> target for label enrichment from log tags
+			services map[string]ServiceTarget
+		}
+		envGroups := make(map[string]*envGroup)
+
+		for _, target := range targets {
+			g, ok := envGroups[target.EnvironmentID]
+			if !ok {
+				g = &envGroup{
+					environmentID:   target.EnvironmentID,
+					environmentName: target.EnvironmentName,
+					services:        make(map[string]ServiceTarget),
+				}
+				envGroups[target.EnvironmentID] = g
+			}
+			g.services[target.ServiceID] = target
+		}
+
+		for _, g := range envGroups {
+			logs, err := lc.collectEnvironmentLogs(ctx, g.environmentID, &limit, g.services)
+			if err != nil {
+				lc.logger.Error("failed to collect environment logs",
+					"environment", g.environmentID, "error", err)
+			} else {
+				allLogs = append(allLogs, logs...)
+			}
+		}
+	}
+
+	// Phase 2: Build and HTTP logs — still per-deployment (no batch alternative).
 	for _, target := range targets {
 		if target.DeploymentID == "" {
 			continue
@@ -69,21 +105,6 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 			"environment_id":   target.EnvironmentID,
 			"environment_name": target.EnvironmentName,
 			"deployment_id":    target.DeploymentID,
-		}
-
-		if lc.types["deployment"] {
-			startDate := lc.getLastSeen(target.DeploymentID, "deployment")
-			var startDateStr *string
-			if !startDate.IsZero() {
-				s := startDate.Format(time.RFC3339Nano)
-				startDateStr = &s
-			}
-			logs, err := lc.collectDeploymentLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
-			if err != nil {
-				lc.logger.Error("failed to collect deployment logs", "deployment", target.DeploymentID, "error", err)
-			} else {
-				allLogs = append(allLogs, logs...)
-			}
 		}
 
 		if lc.types["build"] {
@@ -132,8 +153,23 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 	return nil
 }
 
-func (lc *LogsCollector) collectDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate *string, baseLabels map[string]string) ([]sink.LogEntry, error) {
-	resp, err := lc.client.GetDeploymentLogs(ctx, deploymentID, limit, startDate, nil, nil)
+// collectEnvironmentLogs fetches runtime logs for an entire environment in a
+// single API call, then enriches each log entry with service/project labels
+// by matching the log's ServiceId tag against the known targets.
+func (lc *LogsCollector) collectEnvironmentLogs(
+	ctx context.Context,
+	environmentID string,
+	limit *int,
+	services map[string]ServiceTarget,
+) ([]sink.LogEntry, error) {
+	startDate := lc.getLastSeen(environmentID, "environment")
+	var afterDateStr *string
+	if !startDate.IsZero() {
+		s := startDate.Format(time.RFC3339Nano)
+		afterDateStr = &s
+	}
+
+	resp, err := lc.client.GetEnvironmentLogs(ctx, environmentID, nil, afterDateStr, nil, limit, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -141,17 +177,52 @@ func (lc *LogsCollector) collectDeploymentLogs(ctx context.Context, deploymentID
 	var entries []sink.LogEntry
 	var maxTS time.Time
 
-	for _, log := range resp.DeploymentLogs {
+	for _, log := range resp.EnvironmentLogs {
 		ts, err := time.Parse(time.RFC3339Nano, log.Timestamp)
 		if err != nil {
-			lc.logger.Warn("skipping deployment log with unparseable timestamp", "timestamp", log.Timestamp, "error", err)
+			lc.logger.Warn("skipping environment log with unparseable timestamp",
+				"timestamp", log.Timestamp, "error", err)
 			continue
 		}
 
-		labels := copyLabels(baseLabels)
-		labels["log_type"] = "deployment"
+		labels := map[string]string{
+			"log_type":       "deployment",
+			"environment_id": environmentID,
+		}
 
-		attrs := make(map[string]string)
+		// Enrich labels from tags if the log entry has them.
+		if log.Tags != nil {
+			if log.Tags.ServiceId != nil {
+				if target, ok := services[*log.Tags.ServiceId]; ok {
+					labels["project_id"] = target.ProjectID
+					labels["project_name"] = target.ProjectName
+					labels["service_id"] = target.ServiceID
+					labels["service_name"] = target.ServiceName
+					labels["environment_name"] = target.EnvironmentName
+					labels["deployment_id"] = target.DeploymentID
+				} else {
+					labels["service_id"] = *log.Tags.ServiceId
+				}
+			}
+			if log.Tags.DeploymentId != nil {
+				// Prefer the tag's deployment ID over the target's — the log
+				// may be from a previous deployment still running.
+				labels["deployment_id"] = *log.Tags.DeploymentId
+			}
+			if log.Tags.DeploymentInstanceId != nil {
+				labels["deployment_instance_id"] = *log.Tags.DeploymentInstanceId
+			}
+			if log.Tags.ProjectId != nil {
+				if _, ok := labels["project_id"]; !ok {
+					labels["project_id"] = *log.Tags.ProjectId
+				}
+			}
+			if log.Tags.EnvironmentId != nil {
+				labels["environment_id"] = *log.Tags.EnvironmentId
+			}
+		}
+
+		attrs := make(map[string]string, len(log.Attributes))
 		for _, a := range log.Attributes {
 			attrs[a.Key] = a.Value
 		}
@@ -175,7 +246,7 @@ func (lc *LogsCollector) collectDeploymentLogs(ctx context.Context, deploymentID
 	}
 
 	if !maxTS.IsZero() {
-		lc.setLastSeen(deploymentID, "deployment", maxTS)
+		lc.setLastSeen(environmentID, "environment", maxTS)
 	}
 
 	return entries, nil
@@ -231,7 +302,6 @@ func (lc *LogsCollector) collectBuildLogs(ctx context.Context, deploymentID stri
 }
 
 func (lc *LogsCollector) collectHttpLogs(ctx context.Context, deploymentID string, limit *int, startDate *string, baseLabels map[string]string) ([]sink.LogEntry, error) {
-	// HttpLogs uses string dates, not DateTime
 	resp, err := lc.client.GetHttpLogs(ctx, deploymentID, limit, startDate, nil, nil)
 	if err != nil {
 		return nil, err
@@ -292,18 +362,13 @@ func (lc *LogsCollector) collectHttpLogs(ctx context.Context, deploymentID strin
 	return entries, nil
 }
 
-func (lc *LogsCollector) getLastSeen(deploymentID, logType string) time.Time {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	return lc.lastSeenLog[deploymentID+":"+logType]
+func (lc *LogsCollector) getLastSeen(key, logType string) time.Time {
+	return lc.store.GetLogCursor(key, logType)
 }
 
-func (lc *LogsCollector) setLastSeen(deploymentID, logType string, ts time.Time) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	key := deploymentID + ":" + logType
-	if existing, ok := lc.lastSeenLog[key]; !ok || ts.After(existing) {
-		lc.lastSeenLog[key] = ts
+func (lc *LogsCollector) setLastSeen(key, logType string, ts time.Time) {
+	if err := lc.store.SetLogCursor(key, logType, ts); err != nil {
+		lc.logger.Error("failed to persist log cursor", "key", key, "type", logType, "error", err)
 	}
 }
 

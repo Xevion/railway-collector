@@ -1,11 +1,16 @@
 package railway
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,20 +24,27 @@ const (
 
 // Client wraps the genqlient GraphQL client with rate limiting and auth.
 type Client struct {
-	gql     graphql.Client
-	limiter *rate.Limiter
-	logger  *slog.Logger
+	gql       graphql.Client
+	limiter   *rate.Limiter
+	transport *rateLimitTransport
+	logger    *slog.Logger
 }
 
 // rateLimitTransport injects auth headers and tracks rate limit state.
 type rateLimitTransport struct {
-	token     string
-	inner     http.RoundTripper
+	token  string
+	inner  http.RoundTripper
+	logger *slog.Logger
+
 	mu        sync.Mutex
 	remaining int
 	resetAt   time.Time
-	logger    *slog.Logger
+	// Set to true once we've received at least one rate limit header
+	initialized bool
 }
+
+// reWaitSeconds matches "try again in 1234.567 seconds" in Railway 429 error bodies.
+var reWaitSeconds = regexp.MustCompile(`try again in ([\d.]+) seconds`)
 
 func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", "Bearer "+t.token)
@@ -43,86 +55,130 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		return resp, err
 	}
 
-	// Track rate limit headers
+	t.trackHeaders(resp)
+
+	// Handle 429: parse actual wait time, block, then retry once.
+	if resp.StatusCode == 429 {
+		wait := t.parseRetryWait(resp)
+		t.logger.Warn("rate limited by Railway API, waiting for reset",
+			"wait", wait.Round(time.Second),
+			"reset_at", time.Now().Add(wait).Format(time.RFC3339))
+
+		// Update resetAt so other goroutines also block via wait()
+		t.mu.Lock()
+		newReset := time.Now().Add(wait)
+		if newReset.After(t.resetAt) {
+			t.resetAt = newReset
+		}
+		t.remaining = 0
+		t.initialized = true
+		t.mu.Unlock()
+
+		// Block until reset, then retry the request once
+		resp.Body.Close()
+		time.Sleep(wait)
+
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			req.Body = body
+		}
+
+		resp, err = t.inner.RoundTrip(req)
+		if err != nil {
+			return resp, err
+		}
+		t.trackHeaders(resp)
+		return resp, nil
+	}
+
+	return resp, nil
+}
+
+// parseRetryWait extracts the actual wait duration from a 429 response.
+// Checks Retry-After header first, then parses the error body JSON for
+// "try again in N seconds" messages.
+func (t *rateLimitTransport) parseRetryWait(resp *http.Response) time.Duration {
+	// Try Retry-After header first
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+
+	// Parse body for "try again in N seconds", then restore it so the
+	// caller (genqlient) can still read the response.
+	if resp.Body != nil {
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		// Restore body for downstream readers
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		if err == nil {
+			if matches := reWaitSeconds.FindSubmatch(body); len(matches) > 1 {
+				if secs, err := strconv.ParseFloat(string(matches[1]), 64); err == nil && secs > 0 {
+					return time.Duration(math.Ceil(secs)) * time.Second
+				}
+			}
+			// Try to parse as JSON with errors array
+			var errResp struct {
+				Errors []struct {
+					Message string `json:"message"`
+				} `json:"errors"`
+			}
+			if json.Unmarshal(body, &errResp) == nil {
+				for _, e := range errResp.Errors {
+					if matches := reWaitSeconds.FindStringSubmatch(e.Message); len(matches) > 1 {
+						if secs, err := strconv.ParseFloat(matches[1], 64); err == nil && secs > 0 {
+							return time.Duration(math.Ceil(secs)) * time.Second
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Default: 60 seconds (conservative, not the old 5s)
+	return 60 * time.Second
+}
+
+func (t *rateLimitTransport) trackHeaders(resp *http.Response) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if v := resp.Header.Get("X-RateLimit-Remaining"); v != "" {
 		if remaining, err := strconv.Atoi(v); err == nil {
-			t.mu.Lock()
 			t.remaining = remaining
-			t.mu.Unlock()
-			if remaining < 50 {
+			t.initialized = true
+			if remaining < 50 && remaining > 0 {
 				t.logger.Warn("rate limit running low", "remaining", remaining)
 			}
 		}
 	}
 	if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
 		if resetUnix, err := strconv.ParseInt(v, 10, 64); err == nil {
-			t.mu.Lock()
 			t.resetAt = time.Unix(resetUnix, 0)
-			t.mu.Unlock()
+			t.initialized = true
 		}
 	}
+}
 
-	const maxRetries = 3
-	for attempt := 0; resp.StatusCode == 429 && attempt < maxRetries; attempt++ {
-		// Parse Retry-After header; default to 5s
-		wait := 5 * time.Second
-		if v := resp.Header.Get("Retry-After"); v != "" {
-			if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
-				wait = time.Duration(secs) * time.Second
-			}
-		}
-
-		t.logger.Warn("rate limited by Railway API, retrying",
-			"retry_after", wait, "attempt", attempt+1, "max_retries", maxRetries)
-
-		resp.Body.Close()
-
-		// Ensure we can re-read the request body
-		if req.GetBody != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return nil, fmt.Errorf("getting request body for retry: %w", err)
-			}
-			req.Body = body
-		} else if req.Body != nil {
-			// Body was consumed and can't be re-created
-			return nil, fmt.Errorf("cannot retry request: GetBody is nil and body was consumed")
-		}
-
-		time.Sleep(wait)
-
-		resp, err = t.inner.RoundTrip(req)
-		if err != nil {
-			return resp, err
-		}
-
-		// Re-track rate limit headers on retry response
-		if v := resp.Header.Get("X-RateLimit-Remaining"); v != "" {
-			if remaining, err := strconv.Atoi(v); err == nil {
-				t.mu.Lock()
-				t.remaining = remaining
-				t.mu.Unlock()
-			}
-		}
-		if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
-			if resetUnix, err := strconv.ParseInt(v, 10, 64); err == nil {
-				t.mu.Lock()
-				t.resetAt = time.Unix(resetUnix, 0)
-				t.mu.Unlock()
-			}
-		}
-	}
-
-	return resp, nil
+// getRateLimitState returns the current rate limit state.
+func (t *rateLimitTransport) getRateLimitState() (remaining int, resetAt time.Time, initialized bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.remaining, t.resetAt, t.initialized
 }
 
 // NewClient creates a new Railway API client with rate limiting.
 // rps controls requests per second (0 = no limit).
 func NewClient(token string, rps float64, logger *slog.Logger) *Client {
 	transport := &rateLimitTransport{
-		token:  token,
-		inner:  http.DefaultTransport,
-		logger: logger,
+		token:     token,
+		inner:     http.DefaultTransport,
+		logger:    logger,
+		remaining: -1, // unknown until first response
 	}
 	httpClient := &http.Client{
 		Transport: transport,
@@ -135,17 +191,53 @@ func NewClient(token string, rps float64, logger *slog.Logger) *Client {
 	}
 
 	return &Client{
-		gql:     graphql.NewClient(Endpoint, httpClient),
-		limiter: limiter,
-		logger:  logger,
+		gql:       graphql.NewClient(Endpoint, httpClient),
+		limiter:   limiter,
+		transport: transport,
+		logger:    logger,
 	}
 }
 
+// wait blocks until it's safe to make a request. Checks both the token bucket
+// (RPS smoothing) and the API's hourly rate limit (remaining/resetAt).
 func (c *Client) wait(ctx context.Context) error {
+	// Check API rate limit gate first
+	remaining, resetAt, initialized := c.transport.getRateLimitState()
+	if initialized && remaining <= 0 && time.Now().Before(resetAt) {
+		waitDur := time.Until(resetAt)
+		c.logger.Warn("API rate limit exhausted, waiting for reset",
+			"wait", waitDur.Round(time.Second),
+			"reset_at", resetAt.Format(time.RFC3339))
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitDur):
+			c.logger.Info("rate limit reset, resuming requests")
+		}
+	}
+
+	// Token bucket for RPS smoothing
 	if c.limiter != nil {
 		return c.limiter.Wait(ctx)
 	}
 	return nil
+}
+
+// IsRateLimited returns true if the API rate limit is exhausted, along with
+// the time until reset. Used by the collection loop circuit breaker.
+func (c *Client) IsRateLimited() (bool, time.Duration) {
+	remaining, resetAt, initialized := c.transport.getRateLimitState()
+	if initialized && remaining <= 0 && time.Now().Before(resetAt) {
+		return true, time.Until(resetAt)
+	}
+	return false, 0
+}
+
+// RateLimitInfo returns remaining calls and reset time for budget logging.
+func (c *Client) RateLimitInfo() (remaining int, resetAt time.Time) {
+	r, t, _ := c.transport.getRateLimitState()
+	return r, t
 }
 
 // Me returns the authenticated user info.
@@ -153,7 +245,11 @@ func (c *Client) Me(ctx context.Context) (*MeResponse, error) {
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return Me(ctx, c.gql)
+	resp, err := Me(ctx, c.gql)
+	if err != nil {
+		return nil, c.wrapError("Me", err)
+	}
+	return resp, nil
 }
 
 // GetProjects returns all projects, optionally filtered by workspace.
@@ -161,7 +257,11 @@ func (c *Client) GetProjects(ctx context.Context, workspaceID *string) (*Project
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return Projects(ctx, c.gql, workspaceID)
+	resp, err := Projects(ctx, c.gql, workspaceID)
+	if err != nil {
+		return nil, c.wrapError("GetProjects", err)
+	}
+	return resp, nil
 }
 
 // GetDeployments returns deployments for a service in an environment.
@@ -169,7 +269,11 @@ func (c *Client) GetDeployments(ctx context.Context, projectID, envID, serviceID
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return Deployments(ctx, c.gql, projectID, envID, serviceID, first, after)
+	resp, err := Deployments(ctx, c.gql, projectID, envID, serviceID, first, after)
+	if err != nil {
+		return nil, c.wrapError("GetDeployments", err)
+	}
+	return resp, nil
 }
 
 // GetServiceInstance returns the service instance config.
@@ -177,7 +281,11 @@ func (c *Client) GetServiceInstance(ctx context.Context, envID, serviceID string
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return ServiceInstanceQuery(ctx, c.gql, envID, serviceID)
+	resp, err := ServiceInstanceQuery(ctx, c.gql, envID, serviceID)
+	if err != nil {
+		return nil, c.wrapError("GetServiceInstance", err)
+	}
+	return resp, nil
 }
 
 // GetMetrics returns time-series metrics.
@@ -185,7 +293,11 @@ func (c *Client) GetMetrics(ctx context.Context, projectID, serviceID, envID *st
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
+	resp, err := Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
+	if err != nil {
+		return nil, c.wrapError("GetMetrics", err)
+	}
+	return resp, nil
 }
 
 // GetDeploymentLogs returns runtime logs for a deployment.
@@ -193,7 +305,11 @@ func (c *Client) GetDeploymentLogs(ctx context.Context, deploymentID string, lim
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return DeploymentLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	resp, err := DeploymentLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	if err != nil {
+		return nil, c.wrapError("GetDeploymentLogs", err)
+	}
+	return resp, nil
 }
 
 // GetBuildLogs returns build logs for a deployment.
@@ -201,7 +317,11 @@ func (c *Client) GetBuildLogs(ctx context.Context, deploymentID string, limit *i
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return BuildLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	resp, err := BuildLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	if err != nil {
+		return nil, c.wrapError("GetBuildLogs", err)
+	}
+	return resp, nil
 }
 
 // GetHttpLogs returns HTTP access logs for a deployment.
@@ -209,5 +329,50 @@ func (c *Client) GetHttpLogs(ctx context.Context, deploymentID string, limit *in
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
-	return HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	resp, err := HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
+	if err != nil {
+		return nil, c.wrapError("GetHttpLogs", err)
+	}
+	return resp, nil
+}
+
+// GetEnvironmentLogs returns runtime logs for an entire environment (all services).
+func (c *Client) GetEnvironmentLogs(ctx context.Context, environmentID string, filter *string, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*EnvironmentLogsQueryResponse, error) {
+	if err := c.wait(ctx); err != nil {
+		return nil, err
+	}
+	resp, err := EnvironmentLogsQuery(ctx, c.gql, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
+	if err != nil {
+		return nil, c.wrapError("GetEnvironmentLogs", err)
+	}
+	return resp, nil
+}
+
+// wrapError checks if a GraphQL error contains a 429 status and updates rate
+// limit state accordingly. genqlient returns errors for non-null data+errors
+// responses, so we need to detect 429s in the error message too.
+func (c *Client) wrapError(method string, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "429") || strings.Contains(msg, "Rate limit exceeded") {
+		if matches := reWaitSeconds.FindStringSubmatch(msg); len(matches) > 1 {
+			if secs, parseErr := strconv.ParseFloat(matches[1], 64); parseErr == nil && secs > 0 {
+				wait := time.Duration(math.Ceil(secs)) * time.Second
+				c.transport.mu.Lock()
+				newReset := time.Now().Add(wait)
+				if newReset.After(c.transport.resetAt) {
+					c.transport.resetAt = newReset
+				}
+				c.transport.remaining = 0
+				c.transport.initialized = true
+				c.transport.mu.Unlock()
+
+				c.logger.Warn("rate limit detected in error response",
+					"method", method, "wait", wait)
+			}
+		}
+	}
+	return err
 }

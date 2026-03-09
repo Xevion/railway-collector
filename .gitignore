@@ -4,6 +4,9 @@ collector
 # Environment
 .env
 
+# Local config
+config.yaml
+
 # Editor
 .idea/
 .vscode/
@@ -16,3 +19,6 @@ Thumbs.db
 
 # Output
 *.jsonl
+
+# State
+*.db

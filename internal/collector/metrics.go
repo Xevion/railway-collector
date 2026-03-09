@@ -9,6 +9,7 @@ import (
 
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
+	"github.com/xevion/railway-collector/internal/state"
 )
 
 var measurementMap = map[string]railway.MetricMeasurement{
@@ -39,6 +40,7 @@ type MetricsCollector struct {
 	client       *railway.Client
 	discovery    *Discovery
 	sinks        []sink.Sink
+	store        *state.Store
 	measurements []railway.MetricMeasurement
 	sampleRate   *int
 	avgWindow    *int
@@ -50,6 +52,7 @@ func NewMetricsCollector(
 	client *railway.Client,
 	discovery *Discovery,
 	sinks []sink.Sink,
+	store *state.Store,
 	measurementNames []string,
 	sampleRate, avgWindow int,
 	lookback time.Duration,
@@ -78,6 +81,7 @@ func NewMetricsCollector(
 		client:       client,
 		discovery:    discovery,
 		sinks:        sinks,
+		store:        store,
 		measurements: measurements,
 		sampleRate:   &sampleRate,
 		avgWindow:    &avgWindow,
@@ -94,7 +98,7 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 	}
 
 	now := time.Now().UTC()
-	startDate := now.Add(-mc.lookback).Format(time.RFC3339)
+	fallbackStart := now.Add(-mc.lookback)
 
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
@@ -105,6 +109,13 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 	var allPoints []sink.MetricPoint
 
 	for _, projectID := range projectIDs {
+		// Use persisted cursor if available, otherwise fall back to lookback window
+		startTime := mc.store.GetMetricCursor(projectID)
+		if startTime.IsZero() || startTime.Before(fallbackStart) {
+			startTime = fallbackStart
+		}
+		startDate := startTime.Format(time.RFC3339)
+
 		resp, err := mc.client.GetMetrics(
 			ctx, &projectID, nil, nil,
 			startDate, nil,
@@ -117,6 +128,13 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 			continue
 		}
 
+		// Persist the current time as the cursor for next fetch
+		if err := mc.store.SetMetricCursor(projectID, now); err != nil {
+			mc.logger.Error("failed to persist metric cursor", "project", projectID, "error", err)
+		}
+
+		mc.logger.Debug("metrics API response", "project", projectID, "results", len(resp.Metrics))
+
 		for _, result := range resp.Metrics {
 			metricName, ok := prometheusNameMap[result.Measurement]
 			if !ok {
@@ -125,15 +143,29 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 
 			labels := mc.buildLabels(result.Tags, targets)
 
-			if len(result.Values) > 0 {
-				latest := result.Values[len(result.Values)-1]
-				allPoints = append(allPoints, sink.MetricPoint{
-					Name:      metricName,
-					Value:     latest.Value,
-					Timestamp: time.Unix(int64(latest.Ts), 0),
-					Labels:    labels,
-				})
+			if len(result.Values) == 0 {
+				mc.logger.Debug("metric returned no values",
+					"measurement", result.Measurement,
+					"metric", metricName,
+					"service_id", labels["service_id"],
+					"service_name", labels["service_name"],
+				)
+				continue
 			}
+
+			latest := result.Values[len(result.Values)-1]
+			mc.logger.Debug("metric data point",
+				"metric", metricName,
+				"value", latest.Value,
+				"points_available", len(result.Values),
+				"service_name", labels["service_name"],
+			)
+			allPoints = append(allPoints, sink.MetricPoint{
+				Name:      metricName,
+				Value:     latest.Value,
+				Timestamp: time.Unix(int64(latest.Ts), 0),
+				Labels:    labels,
+			})
 		}
 	}
 

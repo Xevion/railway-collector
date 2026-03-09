@@ -15,7 +15,7 @@ collect:
   metrics:
     enabled: true
     # How often to scrape metrics from Railway API.
-    interval: 30s
+    interval: 5m
     # Which measurements to collect.
     # Options: cpu, cpu_limit, memory, memory_limit, network_rx, network_tx,
     #          disk, ephemeral_disk, backup
@@ -30,25 +30,36 @@ collect:
     # Smoothing window for CPU metrics (seconds).
     averaging_window_seconds: 60
     # How far back each scrape looks. Should be >= interval.
-    lookback: 5m
+    lookback: 10m
 
   logs:
     enabled: true
-    # How often to poll for new logs.
-    interval: 15s
+    # How often to poll for new logs. Runtime logs are batched per environment;
+    # build and HTTP logs are per deployment. Budget accordingly.
+    interval: 2m
     # Which log types to collect.
     # Options: deployment, build, http
     types:
       - deployment
       - build
       - http
-    # Max log entries per query per deployment.
+    # Max log entries per query.
     limit: 500
 
   resources:
     enabled: true
     # How often to re-discover projects, services, environments.
-    interval: 5m
+    interval: 30m
+
+  discovery:
+    # Cache TTL for workspace list (discovered via Me query).
+    workspace_ttl: 1h
+    # Cache TTL for per-project discovery (services, envs, deployments).
+    # Each project is cached independently and refreshed on its own schedule.
+    project_ttl: 1h
+    # Random jitter applied to TTLs: actual TTL = base +/- jitter.
+    # Spreads API calls over time to avoid burst patterns.
+    jitter: 15m
 
 # Filters control which Railway resources are collected.
 # Empty lists mean "collect everything". Entries can be exact names, IDs, or regex.
@@ -68,6 +79,21 @@ sinks:
     enabled: false
     # Path for JSON lines output (metrics + logs).
     path: "./railway-collector.jsonl"
+
+  otlp:
+    enabled: false
+    # OTLP HTTP endpoint for metrics (e.g. VictoriaMetrics).
+    # metrics_endpoint: "http://victoriametrics:8428/opentelemetry/v1/metrics"
+    # OTLP HTTP endpoint for logs (e.g. VictoriaLogs).
+    # logs_endpoint: "http://victorialogs:9428/insert/opentelemetry/v1/logs"
+    # Extra headers (e.g. VL-Stream-Fields for VictoriaLogs stream control).
+    # headers:
+    #   VL-Stream-Fields: "service_name,environment_name"
+
+# State persistence for cursors across restarts.
+state:
+  # Path to bbolt database file.
+  path: "./railway-collector.db"
 
 # Log level for the collector itself: debug, info, warn, error.
 log_level: info

@@ -17,7 +17,13 @@ type Config struct {
 	Collect  CollectConfig `koanf:"collect"`
 	Filters  FiltersConfig `koanf:"filters"`
 	Sinks    SinksConfig   `koanf:"sinks"`
+	State    StateConfig   `koanf:"state"`
 	LogLevel string        `koanf:"log_level"`
+}
+
+type StateConfig struct {
+	// Path to bbolt database for persisting cursors across restarts
+	Path string `koanf:"path"`
 }
 
 type RailwayConfig struct {
@@ -30,6 +36,16 @@ type CollectConfig struct {
 	Metrics   MetricsCollectConfig   `koanf:"metrics"`
 	Logs      LogsCollectConfig      `koanf:"logs"`
 	Resources ResourcesCollectConfig `koanf:"resources"`
+	Discovery DiscoveryCollectConfig `koanf:"discovery"`
+}
+
+type DiscoveryCollectConfig struct {
+	// Base TTL for workspace list cache (default 1h)
+	WorkspaceTTL time.Duration `koanf:"workspace_ttl"`
+	// Base TTL for per-project discovery cache (default 1h)
+	ProjectTTL time.Duration `koanf:"project_ttl"`
+	// Random jitter applied to TTLs: ±jitter (default 15m)
+	Jitter time.Duration `koanf:"jitter"`
 }
 
 type MetricsCollectConfig struct {
@@ -64,6 +80,17 @@ type FiltersConfig struct {
 type SinksConfig struct {
 	Prometheus PrometheusSinkConfig `koanf:"prometheus"`
 	File       FileSinkConfig       `koanf:"file"`
+	OTLP       OTLPSinkConfig       `koanf:"otlp"`
+}
+
+type OTLPSinkConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// Endpoint for OTLP HTTP metrics (e.g. http://victoriametrics:8428/opentelemetry/v1/metrics)
+	MetricsEndpoint string `koanf:"metrics_endpoint"`
+	// Endpoint for OTLP HTTP logs (e.g. http://victorialogs:9428/insert/opentelemetry/v1/logs)
+	LogsEndpoint string `koanf:"logs_endpoint"`
+	// Extra headers for requests (e.g. VL-Stream-Fields for VictoriaLogs)
+	Headers map[string]string `koanf:"headers"`
 }
 
 type PrometheusSinkConfig struct {
@@ -79,24 +106,32 @@ type FileSinkConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		LogLevel: "info",
+		State: StateConfig{
+			Path: "./railway-collector.db",
+		},
 		Collect: CollectConfig{
 			Metrics: MetricsCollectConfig{
 				Enabled:                true,
-				Interval:               30 * time.Second,
+				Interval:               5 * time.Minute,
 				Measurements:           []string{"cpu", "memory", "network_rx", "network_tx", "disk"},
 				SampleRateSeconds:      60,
 				AveragingWindowSeconds: 60,
-				Lookback:               5 * time.Minute,
+				Lookback:               10 * time.Minute,
 			},
 			Logs: LogsCollectConfig{
 				Enabled:  true,
-				Interval: 15 * time.Second,
+				Interval: 2 * time.Minute,
 				Types:    []string{"deployment", "build", "http"},
 				Limit:    500,
 			},
 			Resources: ResourcesCollectConfig{
 				Enabled:  true,
-				Interval: 5 * time.Minute,
+				Interval: 30 * time.Minute,
+			},
+			Discovery: DiscoveryCollectConfig{
+				WorkspaceTTL: time.Hour,
+				ProjectTTL:   time.Hour,
+				Jitter:       15 * time.Minute,
 			},
 		},
 		Sinks: SinksConfig{
