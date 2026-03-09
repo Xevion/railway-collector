@@ -2,9 +2,14 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -17,6 +22,8 @@ type LogsCollector struct {
 	sinks     []sink.Sink
 	types     map[string]bool
 	limit     int
+	interval  time.Duration
+	firstRun  bool
 	logger    *slog.Logger
 	store     *state.Store
 }
@@ -27,6 +34,7 @@ func NewLogsCollector(
 	sinks []sink.Sink,
 	types []string,
 	limit int,
+	interval time.Duration,
 	store *state.Store,
 	logger *slog.Logger,
 ) *LogsCollector {
@@ -41,6 +49,8 @@ func NewLogsCollector(
 		sinks:     sinks,
 		types:     typeSet,
 		limit:     limit,
+		interval:  interval,
+		firstRun:  true,
 		store:     store,
 		logger:    logger,
 	}
@@ -52,7 +62,16 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		return nil
 	}
 
-	var allLogs []sink.LogEntry
+	// Skip jitter on the initial collection after startup
+	applyJitter := !lc.firstRun
+	if lc.firstRun {
+		lc.firstRun = false
+	}
+
+	var (
+		mu      sync.Mutex
+		allLogs []sink.LogEntry
+	)
 	limit := lc.limit
 
 	// Phase 1: Environment logs — one API call per unique environment instead
@@ -68,74 +87,133 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		envGroups := make(map[string]*envGroup)
 
 		for _, target := range targets {
-			g, ok := envGroups[target.EnvironmentID]
+			eg, ok := envGroups[target.EnvironmentID]
 			if !ok {
-				g = &envGroup{
+				eg = &envGroup{
 					environmentID:   target.EnvironmentID,
 					environmentName: target.EnvironmentName,
 					services:        make(map[string]ServiceTarget),
 				}
-				envGroups[target.EnvironmentID] = g
+				envGroups[target.EnvironmentID] = eg
 			}
-			g.services[target.ServiceID] = target
+			eg.services[target.ServiceID] = target
 		}
 
-		for _, g := range envGroups {
-			logs, err := lc.collectEnvironmentLogs(ctx, g.environmentID, &limit, g.services)
-			if err != nil {
-				lc.logger.Error("failed to collect environment logs",
-					"environment", g.environmentID, "error", err)
-			} else {
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(4)
+
+		for _, eg := range envGroups {
+			g.Go(func() error {
+				// Spread API calls across 80% of the interval to avoid thundering herd
+				if applyJitter {
+					maxJitter := time.Duration(float64(lc.interval) * 0.8)
+					if maxJitter > 0 {
+						jitter := time.Duration(rand.Int64N(int64(maxJitter)))
+						select {
+						case <-gCtx.Done():
+							return gCtx.Err()
+						case <-time.After(jitter):
+						}
+					}
+				}
+
+				localLimit := limit
+				logs, err := lc.collectEnvironmentLogs(gCtx, eg.environmentID, &localLimit, eg.services)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						lc.logger.Debug("environment log collection cancelled",
+							"environment", eg.environmentID)
+					} else {
+						lc.logger.Error("failed to collect environment logs",
+							"environment", eg.environmentID, "error", err)
+					}
+					return nil
+				}
+				mu.Lock()
 				allLogs = append(allLogs, logs...)
-			}
+				mu.Unlock()
+				return nil
+			})
 		}
+
+		_ = g.Wait()
 	}
 
 	// Phase 2: Build and HTTP logs — still per-deployment (no batch alternative).
-	for _, target := range targets {
-		if target.DeploymentID == "" {
-			continue
+	{
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(4)
+
+		for _, target := range targets {
+			if target.DeploymentID == "" {
+				continue
+			}
+
+			g.Go(func() error {
+				// Spread API calls across 80% of the interval to avoid thundering herd
+				if applyJitter {
+					maxJitter := time.Duration(float64(lc.interval) * 0.8)
+					if maxJitter > 0 {
+						jitter := time.Duration(rand.Int64N(int64(maxJitter)))
+						select {
+						case <-gCtx.Done():
+							return gCtx.Err()
+						case <-time.After(jitter):
+						}
+					}
+				}
+
+				baseLabels := map[string]string{
+					"project_id":       target.ProjectID,
+					"project_name":     target.ProjectName,
+					"service_id":       target.ServiceID,
+					"service_name":     target.ServiceName,
+					"environment_id":   target.EnvironmentID,
+					"environment_name": target.EnvironmentName,
+					"deployment_id":    target.DeploymentID,
+				}
+
+				localLimit := limit
+
+				if lc.types["build"] {
+					startDate := lc.getLastSeen(target.DeploymentID, "build")
+					var startDateStr *string
+					if !startDate.IsZero() {
+						s := startDate.Format(time.RFC3339Nano)
+						startDateStr = &s
+					}
+					logs, err := lc.collectBuildLogs(gCtx, target.DeploymentID, &localLimit, startDateStr, baseLabels)
+					if err != nil {
+						lc.logger.Debug("failed to collect build logs", "deployment", target.DeploymentID, "error", err)
+					} else {
+						mu.Lock()
+						allLogs = append(allLogs, logs...)
+						mu.Unlock()
+					}
+				}
+
+				if lc.types["http"] {
+					startDate := lc.getLastSeen(target.DeploymentID, "http")
+					var startDateStr *string
+					if !startDate.IsZero() {
+						s := startDate.Format(time.RFC3339Nano)
+						startDateStr = &s
+					}
+					logs, err := lc.collectHttpLogs(gCtx, target.DeploymentID, &localLimit, startDateStr, baseLabels)
+					if err != nil {
+						lc.logger.Debug("failed to collect HTTP logs", "deployment", target.DeploymentID, "error", err)
+					} else {
+						mu.Lock()
+						allLogs = append(allLogs, logs...)
+						mu.Unlock()
+					}
+				}
+
+				return nil
+			})
 		}
 
-		baseLabels := map[string]string{
-			"project_id":       target.ProjectID,
-			"project_name":     target.ProjectName,
-			"service_id":       target.ServiceID,
-			"service_name":     target.ServiceName,
-			"environment_id":   target.EnvironmentID,
-			"environment_name": target.EnvironmentName,
-			"deployment_id":    target.DeploymentID,
-		}
-
-		if lc.types["build"] {
-			startDate := lc.getLastSeen(target.DeploymentID, "build")
-			var startDateStr *string
-			if !startDate.IsZero() {
-				s := startDate.Format(time.RFC3339Nano)
-				startDateStr = &s
-			}
-			logs, err := lc.collectBuildLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
-			if err != nil {
-				lc.logger.Debug("failed to collect build logs", "deployment", target.DeploymentID, "error", err)
-			} else {
-				allLogs = append(allLogs, logs...)
-			}
-		}
-
-		if lc.types["http"] {
-			startDate := lc.getLastSeen(target.DeploymentID, "http")
-			var startDateStr *string
-			if !startDate.IsZero() {
-				s := startDate.Format(time.RFC3339Nano)
-				startDateStr = &s
-			}
-			logs, err := lc.collectHttpLogs(ctx, target.DeploymentID, &limit, startDateStr, baseLabels)
-			if err != nil {
-				lc.logger.Debug("failed to collect HTTP logs", "deployment", target.DeploymentID, "error", err)
-			} else {
-				allLogs = append(allLogs, logs...)
-			}
-		}
+		_ = g.Wait()
 	}
 
 	if len(allLogs) == 0 {
@@ -144,9 +222,27 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 
 	lc.logger.Debug("collected log entries", "count", len(allLogs))
 
+	// Use a fresh bounded context for sink writes if the original was cancelled,
+	// so we don't lose data that was already collected.
+	sinkCtx := ctx
+	if ctx.Err() != nil {
+		lc.logger.Info("original context cancelled, flushing collected data with 10s deadline")
+		var sinkCancel context.CancelFunc
+		sinkCtx, sinkCancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer sinkCancel()
+	}
+
 	for _, s := range lc.sinks {
-		if err := s.WriteLogs(ctx, allLogs); err != nil {
+		if err := s.WriteLogs(sinkCtx, allLogs); err != nil {
 			lc.logger.Error("failed to write logs to sink", "sink", s.Name(), "error", err)
+		}
+	}
+
+	if ctx.Err() != nil {
+		if sinkCtx.Err() != nil {
+			lc.logger.Warn("sink flush may have been truncated by timeout")
+		} else {
+			lc.logger.Info("sink flush completed successfully during shutdown")
 		}
 	}
 

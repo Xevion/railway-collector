@@ -8,8 +8,10 @@ import (
 )
 
 var (
-	logCursorBucket    = []byte("log_cursors")
-	metricCursorBucket = []byte("metric_cursors")
+	logCursorBucket      = []byte("log_cursors")
+	metricCursorBucket   = []byte("metric_cursors")
+	discoveryCacheBucket = []byte("discovery_cache")
+	projectListBucket    = []byte("project_list_cache")
 )
 
 // Store persists collection cursors across restarts.
@@ -26,11 +28,10 @@ func Open(path string) (*Store, error) {
 
 	// Ensure buckets exist
 	if err := db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(logCursorBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(metricCursorBucket); err != nil {
-			return err
+		for _, b := range [][]byte{logCursorBucket, metricCursorBucket, discoveryCacheBucket, projectListBucket} {
+			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -91,6 +92,70 @@ func (s *Store) SetMetricCursor(projectID string, ts time.Time) error {
 	key := []byte(projectID)
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(metricCursorBucket).Put(key, []byte(ts.Format(time.RFC3339Nano)))
+	})
+}
+
+// GetDiscoveryCache returns the raw JSON for a cached project discovery entry, or nil if not found.
+func (s *Store) GetDiscoveryCache(projectID string) ([]byte, error) {
+	var data []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(discoveryCacheBucket).Get([]byte(projectID))
+		if v != nil {
+			data = make([]byte, len(v))
+			copy(data, v)
+		}
+		return nil
+	})
+	return data, err
+}
+
+// SetDiscoveryCache stores raw JSON for a project discovery cache entry.
+func (s *Store) SetDiscoveryCache(projectID string, data []byte) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(discoveryCacheBucket).Put([]byte(projectID), data)
+	})
+}
+
+// ListDiscoveryCache returns all cached project discovery entries keyed by projectID.
+func (s *Store) ListDiscoveryCache() (map[string][]byte, error) {
+	result := make(map[string][]byte)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(discoveryCacheBucket)
+		return b.ForEach(func(k, v []byte) error {
+			data := make([]byte, len(v))
+			copy(data, v)
+			result[string(k)] = data
+			return nil
+		})
+	})
+	return result, err
+}
+
+// DeleteDiscoveryCache removes a cached project discovery entry.
+func (s *Store) DeleteDiscoveryCache(projectID string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(discoveryCacheBucket).Delete([]byte(projectID))
+	})
+}
+
+// GetProjectListCache returns the raw JSON for a cached project list, or nil if not found.
+func (s *Store) GetProjectListCache(workspaceID string) ([]byte, error) {
+	var data []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(projectListBucket).Get([]byte(workspaceID))
+		if v != nil {
+			data = make([]byte, len(v))
+			copy(data, v)
+		}
+		return nil
+	})
+	return data, err
+}
+
+// SetProjectListCache stores raw JSON for a workspace's project list cache entry.
+func (s *Store) SetProjectListCache(workspaceID string, data []byte) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(projectListBucket).Put([]byte(workspaceID), data)
 	})
 }
 

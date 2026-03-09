@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -207,39 +208,106 @@ func (c *Client) wait(ctx context.Context) error {
 	return nil
 }
 
-// do executes fn with wait+retry. If fn returns a 429-related error,
-// wait blocks until reset and retries once.
+// do executes fn with wait+retry and exponential backoff. Retries on 429,
+// 500, 502, 503, and 504 errors up to maxAttempts times.
 func do[T any](c *Client, ctx context.Context, method string, fn func() (T, error)) (T, error) {
-	if err := c.wait(ctx); err != nil {
-		var zero T
-		return zero, err
+	const maxAttempts = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := c.wait(ctx); err != nil {
+			var zero T
+			return zero, err
+		}
+
+		result, err := fn()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+
+		// Determine if this is a retryable error
+		if !c.isRetryable(err) {
+			return result, c.wrapError(method, err)
+		}
+
+		// Update rate limit state from error if applicable
+		c.wrapError(method, err)
+
+		// Don't backoff after the last attempt — we're about to exit
+		if attempt == maxAttempts-1 {
+			break
+		}
+
+		// Calculate backoff: base * 2^attempt + jitter
+		// For 429s, use the server's reset time if available
+		backoff := c.retryBackoff(attempt)
+
+		c.logger.Warn("retryable error, backing off",
+			"method", method,
+			"attempt", attempt+1,
+			"max_attempts", maxAttempts,
+			"backoff", backoff.Round(time.Millisecond),
+			"error", err,
+		)
+
+		select {
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		case <-time.After(backoff):
+		}
 	}
 
-	result, err := fn()
+	var zero T
+	return zero, c.wrapError(method, lastErr)
+}
+
+// isRetryable returns true if the error is worth retrying.
+func (c *Client) isRetryable(err error) bool {
 	if err == nil {
-		return result, nil
+		return false
+	}
+	// Check if transport detected a 429
+	if limited, _ := c.IsRateLimited(); limited {
+		return true
+	}
+	// Check error message for server errors
+	msg := err.Error()
+	for _, code := range []string{"429", "500", "502", "503", "504"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	if strings.Contains(msg, "Rate limit exceeded") {
+		return true
+	}
+	return false
+}
+
+// retryBackoff calculates the backoff duration for a retry attempt.
+// For 429s, respects the server's reset time. For other errors, uses
+// exponential backoff: 1s * 2^attempt + random jitter up to 1s.
+// Capped at 60s to avoid excessively long waits.
+func (c *Client) retryBackoff(attempt int) time.Duration {
+	const maxBackoff = 60 * time.Second
+
+	// If we're rate limited, use the server's reset time
+	if limited, wait := c.IsRateLimited(); limited && wait > 0 {
+		if wait > maxBackoff {
+			return maxBackoff
+		}
+		return wait
 	}
 
-	// Check if transport detected a 429 during this call
-	limited, _ := c.IsRateLimited()
-	if !limited {
-		return result, c.wrapError(method, err)
+	// Exponential backoff with jitter
+	base := time.Second * time.Duration(1<<uint(attempt))    // 1s, 2s, 4s
+	jitter := time.Duration(rand.Int64N(int64(time.Second))) // 0-1s random
+	backoff := base + jitter
+	if backoff > maxBackoff {
+		return maxBackoff
 	}
-
-	// wrapError updates state from the error message
-	c.wrapError(method, err)
-
-	// Block until reset, then retry once
-	if waitErr := c.wait(ctx); waitErr != nil {
-		var zero T
-		return zero, waitErr
-	}
-
-	result, err = fn()
-	if err != nil {
-		return result, c.wrapError(method, err)
-	}
-	return result, nil
+	return backoff
 }
 
 // IsRateLimited returns true if the API rate limit is exhausted, along with

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,6 +24,142 @@ import (
 	"github.com/xevion/railway-collector/internal/sink"
 	"github.com/xevion/railway-collector/internal/state"
 )
+
+// safeBudget is the maximum API calls per hour before auto-adjustment kicks in.
+const safeBudget = 900
+
+type budgetResult struct {
+	metricsInterval  time.Duration
+	logsInterval     time.Duration
+	metricsPerHour   int
+	logsPerHour      int
+	discoveryPerHour int // effective (post-cache) rate used for budgeting
+	discoveryWorst   int // worst-case rate before cache discount
+	totalPerHour     int
+}
+
+// calculateBudget estimates API calls/hour from the current target set and config,
+// then returns recommended collection intervals (auto-adjusted if the estimate
+// exceeds safeBudget). It does NOT modify cfg.
+func calculateBudget(
+	targets []collector.ServiceTarget,
+	workspaceCount int,
+	cfg *config.Config,
+	logger *slog.Logger,
+) budgetResult {
+	targetCount := len(targets)
+	envSet := make(map[string]bool)
+	for _, t := range targets {
+		envSet[t.EnvironmentID] = true
+	}
+	uniqueEnvs := len(envSet)
+	projSet := make(map[string]bool)
+	for _, t := range targets {
+		projSet[t.ProjectID] = true
+	}
+	uniqueProjects := len(projSet)
+
+	metricsInterval := cfg.Collect.Metrics.Interval
+	logsInterval := cfg.Collect.Logs.Interval
+
+	metricsCallsPerHour := 0
+	if cfg.Collect.Metrics.Enabled {
+		metricsCallsPerHour = uniqueProjects * int(time.Hour/metricsInterval)
+	}
+	logCallsPerCycle := 0
+	if cfg.Collect.Logs.Enabled {
+		logCallsPerCycle += uniqueEnvs      // environment logs
+		logCallsPerCycle += targetCount * 2 // build + http per deployment
+	}
+	logCallsPerHour := 0
+	if cfg.Collect.Logs.Enabled && logsInterval > 0 {
+		logCallsPerHour = logCallsPerCycle * int(time.Hour/logsInterval)
+	}
+
+	discoveryCallsPerHour := 0
+	if cfg.Collect.Resources.Enabled && cfg.Collect.Resources.Interval > 0 {
+		discoveryCallsPerCycle := workspaceCount + targetCount*2
+		discoveryCallsPerHour = discoveryCallsPerCycle * int(time.Hour/cfg.Collect.Resources.Interval)
+	}
+
+	// After the first cycle, ~80% of discovery calls will be cache hits.
+	// Use the effective (post-cache) rate for budget allocation.
+	effectiveDiscoveryPerHour := int(float64(discoveryCallsPerHour) * 0.2)
+
+	totalPerHour := metricsCallsPerHour + logCallsPerHour + effectiveDiscoveryPerHour
+	logger.Info("estimated API call budget",
+		"metrics_per_hour", metricsCallsPerHour,
+		"logs_per_hour", logCallsPerHour,
+		"discovery_per_hour_worst", discoveryCallsPerHour,
+		"discovery_per_hour_effective", effectiveDiscoveryPerHour,
+		"total_per_hour", totalPerHour,
+		"projects", uniqueProjects,
+		"environments", uniqueEnvs,
+		"targets", targetCount,
+	)
+
+	// Auto-adjust metrics and logs intervals if estimated budget exceeds safeBudget.
+	// Discovery is left alone since it's mostly cache hits.
+	if totalPerHour > safeBudget && (metricsCallsPerHour+logCallsPerHour) > 0 {
+		availableBudget := safeBudget - effectiveDiscoveryPerHour
+		if availableBudget <= 0 {
+			logger.Error("discovery alone exceeds API budget; cannot auto-adjust collection intervals",
+				"discovery_per_hour", effectiveDiscoveryPerHour, "budget", safeBudget)
+		} else {
+			scaleFactor := float64(metricsCallsPerHour+logCallsPerHour) / float64(availableBudget)
+			if scaleFactor < 1 {
+				scaleFactor = 1
+			}
+
+			if cfg.Collect.Metrics.Enabled {
+				orig := metricsInterval
+				metricsInterval = time.Duration(float64(orig) * scaleFactor)
+				logger.Warn("auto-adjusted metrics interval to fit API budget",
+					"original", orig, "adjusted", metricsInterval)
+			}
+			if cfg.Collect.Logs.Enabled {
+				orig := logsInterval
+				logsInterval = time.Duration(float64(orig) * scaleFactor)
+				logger.Warn("auto-adjusted logs interval to fit API budget",
+					"original", orig, "adjusted", logsInterval)
+			}
+
+			// Recalculate with adjusted intervals
+			if cfg.Collect.Metrics.Enabled {
+				metricsCallsPerHour = uniqueProjects * int(time.Hour/metricsInterval)
+			}
+			if cfg.Collect.Logs.Enabled && logsInterval > 0 {
+				logCallsPerHour = logCallsPerCycle * int(time.Hour/logsInterval)
+			}
+			totalPerHour = metricsCallsPerHour + logCallsPerHour + effectiveDiscoveryPerHour
+			logger.Info("adjusted API call budget",
+				"metrics_per_hour", metricsCallsPerHour,
+				"logs_per_hour", logCallsPerHour,
+				"discovery_per_hour", effectiveDiscoveryPerHour,
+				"total_per_hour", totalPerHour,
+			)
+		}
+	}
+
+	return budgetResult{
+		metricsInterval:  metricsInterval,
+		logsInterval:     logsInterval,
+		metricsPerHour:   metricsCallsPerHour,
+		logsPerHour:      logCallsPerHour,
+		discoveryPerHour: effectiveDiscoveryPerHour,
+		discoveryWorst:   discoveryCallsPerHour,
+		totalPerHour:     totalPerHour,
+	}
+}
+
+// significantChange reports whether two durations differ by more than 10%.
+func significantChange(a, b time.Duration) bool {
+	if a == 0 || b == 0 {
+		return a != b
+	}
+	ratio := float64(a) / float64(b)
+	return math.Abs(ratio-1) > 0.10
+}
 
 func main() {
 	configPath := flag.String("config", "", "path to config YAML file")
@@ -141,67 +279,25 @@ func main() {
 
 	// Initialize discovery with caching
 	discovery := collector.NewDiscovery(collector.DiscoveryConfig{
-		Client:       client,
-		Filters:      cfg.Filters,
-		Workspaces:   workspaces,
-		WorkspaceTTL: cfg.Collect.Discovery.WorkspaceTTL,
-		ProjectTTL:   cfg.Collect.Discovery.ProjectTTL,
-		Jitter:       cfg.Collect.Discovery.Jitter,
-		Logger:       logger,
+		Client:         client,
+		Filters:        cfg.Filters,
+		Workspaces:     workspaces,
+		WorkspaceTTL:   cfg.Collect.Discovery.WorkspaceTTL,
+		ProjectTTL:     cfg.Collect.Discovery.ProjectTTL,
+		ProjectListTTL: cfg.Collect.Discovery.ProjectListTTL,
+		Jitter:         cfg.Collect.Discovery.Jitter,
+		Store:          store,
+		Logger:         logger,
 	})
 	if err := discovery.Refresh(ctx); err != nil {
 		logger.Error("initial discovery failed", "error", err)
 		os.Exit(1)
 	}
 
-	// Log estimated API call budget
-	targetCount := len(discovery.Targets())
-	envSet := make(map[string]bool)
-	for _, t := range discovery.Targets() {
-		envSet[t.EnvironmentID] = true
-	}
-	uniqueEnvs := len(envSet)
-	projSet := make(map[string]bool)
-	for _, t := range discovery.Targets() {
-		projSet[t.ProjectID] = true
-	}
-	uniqueProjects := len(projSet)
-
-	metricsCallsPerHour := 0
-	if cfg.Collect.Metrics.Enabled {
-		metricsCallsPerHour = uniqueProjects * int(time.Hour/cfg.Collect.Metrics.Interval)
-	}
-	logCallsPerCycle := 0
-	if cfg.Collect.Logs.Enabled {
-		logCallsPerCycle += uniqueEnvs      // environment logs
-		logCallsPerCycle += targetCount * 2 // build + http per deployment
-	}
-	logCallsPerHour := 0
-	if cfg.Collect.Logs.Enabled && cfg.Collect.Logs.Interval > 0 {
-		logCallsPerHour = logCallsPerCycle * int(time.Hour/cfg.Collect.Logs.Interval)
-	}
-	discoveryCallsPerHour := 0
-	if cfg.Collect.Resources.Enabled && cfg.Collect.Resources.Interval > 0 {
-		// With caching, most discovery refreshes are no-ops (cache hits).
-		// Worst case: 1 workspace query + 1 project query per workspace per hour
-		// + 2 calls per target per hour (deployment + service instance)
-		discoveryCallsPerCycle := len(workspaces) + targetCount*2
-		discoveryCallsPerHour = discoveryCallsPerCycle * int(time.Hour/cfg.Collect.Resources.Interval)
-	}
-	totalPerHour := metricsCallsPerHour + logCallsPerHour + discoveryCallsPerHour
-	logger.Info("estimated API call budget",
-		"metrics_per_hour", metricsCallsPerHour,
-		"logs_per_hour", logCallsPerHour,
-		"discovery_per_hour", discoveryCallsPerHour,
-		"total_per_hour", totalPerHour,
-		"projects", uniqueProjects,
-		"environments", uniqueEnvs,
-		"targets", targetCount,
-	)
-	if totalPerHour > 900 {
-		logger.Warn("estimated API calls exceed safe budget for Hobby plan (1000 RPH); consider increasing intervals or adding filters",
-			"estimated", totalPerHour, "limit", 1000)
-	}
+	// Calculate initial API budget and recommended intervals
+	budget := calculateBudget(discovery.Targets(), len(workspaces), cfg, logger)
+	currentMetricsInterval := budget.metricsInterval
+	currentLogsInterval := budget.logsInterval
 
 	// Initialize collectors
 	var metricsCollector *collector.MetricsCollector
@@ -212,6 +308,7 @@ func main() {
 			cfg.Collect.Metrics.SampleRateSeconds,
 			cfg.Collect.Metrics.AveragingWindowSeconds,
 			cfg.Collect.Metrics.Lookback,
+			currentMetricsInterval,
 			logger,
 		)
 	}
@@ -222,6 +319,7 @@ func main() {
 			client, discovery, sinks,
 			cfg.Collect.Logs.Types,
 			cfg.Collect.Logs.Limit,
+			currentLogsInterval,
 			store,
 			logger,
 		)
@@ -239,43 +337,66 @@ func main() {
 
 	// Collection loop -- only create tickers for enabled collectors;
 	// nil channels block forever in select, effectively disabling that case.
+	// Ticker references are stored at this scope so discovery can Reset() them.
+	var tickers []*time.Ticker
+	var metricsTicker, logsTicker *time.Ticker
+
 	var metricsCh <-chan time.Time
 	if metricsCollector != nil {
-		t := time.NewTicker(cfg.Collect.Metrics.Interval)
-		defer t.Stop()
-		metricsCh = t.C
+		metricsTicker = time.NewTicker(currentMetricsInterval)
+		defer metricsTicker.Stop()
+		tickers = append(tickers, metricsTicker)
+		metricsCh = metricsTicker.C
 	}
 	var logsCh <-chan time.Time
 	if logsCollector != nil {
-		t := time.NewTicker(cfg.Collect.Logs.Interval)
-		defer t.Stop()
-		logsCh = t.C
+		logsTicker = time.NewTicker(currentLogsInterval)
+		defer logsTicker.Stop()
+		tickers = append(tickers, logsTicker)
+		logsCh = logsTicker.C
 	}
 	var discoveryCh <-chan time.Time
 	if cfg.Collect.Resources.Enabled {
 		t := time.NewTicker(cfg.Collect.Resources.Interval)
 		defer t.Stop()
+		tickers = append(tickers, t)
 		discoveryCh = t.C
 	}
 
 	var wg sync.WaitGroup
+	discoveryDone := make(chan struct{}, 1)
+
+	// Overlap protection: skip a cycle if the previous one is still running
+	var metricsRunning, logsRunning, discoveryRunning sync.Mutex
 
 	// Collect immediately on start
 	if metricsCollector != nil {
+		metricsRunning.Lock()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer metricsRunning.Unlock()
 			if err := metricsCollector.Collect(ctx); err != nil {
-				logger.Error("initial metrics collection failed", "error", err)
+				if errors.Is(err, context.Canceled) {
+					logger.Debug("initial metrics collection cancelled")
+				} else {
+					logger.Error("initial metrics collection failed", "error", err)
+				}
 			}
 		}()
 	}
 	if logsCollector != nil {
+		logsRunning.Lock()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logsRunning.Unlock()
 			if err := logsCollector.Collect(ctx); err != nil {
-				logger.Error("initial logs collection failed", "error", err)
+				if errors.Is(err, context.Canceled) {
+					logger.Debug("initial logs collection cancelled")
+				} else {
+					logger.Error("initial logs collection failed", "error", err)
+				}
 			}
 		}()
 	}
@@ -284,19 +405,37 @@ func main() {
 		select {
 		case <-sigCh:
 			logger.Info("shutting down, waiting for in-flight collections...")
-			cancel()
 
-			done := make(chan struct{})
+			// Phase 1 (soft): stop tickers so no new work is spawned,
+			// then wait up to 5s for in-flight goroutines to finish.
+			for _, t := range tickers {
+				t.Stop()
+			}
+
+			drained := make(chan struct{})
 			go func() {
 				wg.Wait()
-				close(done)
+				close(drained)
 			}()
+
 			select {
-			case <-done:
+			case <-drained:
 				logger.Debug("all collections drained")
-			case <-time.After(10 * time.Second):
-				logger.Warn("timed out waiting for in-flight collections")
+			case <-time.After(5 * time.Second):
+				// Phase 2 (hard): cancel the context to abort in-flight HTTP
+				// requests, then wait another 5s for goroutines to return.
+				logger.Warn("in-flight collections still running, cancelling context...")
+				cancel()
+				select {
+				case <-drained:
+					logger.Debug("all collections drained after cancel")
+				case <-time.After(5 * time.Second):
+					logger.Warn("timed out waiting for in-flight collections")
+				}
 			}
+
+			// Ensure context is cancelled before closing sinks, even on clean drain
+			cancel()
 
 			for _, s := range sinks {
 				if err := s.Close(); err != nil {
@@ -309,16 +448,24 @@ func main() {
 			return
 
 		case <-metricsCh:
-			// Circuit breaker: skip if rate limited
 			if limited, wait := client.IsRateLimited(); limited {
 				logger.Warn("skipping metrics collection, API rate limited", "wait", wait.Round(time.Second))
+				continue
+			}
+			if !metricsRunning.TryLock() {
+				logger.Warn("skipping metrics collection, previous cycle still running")
 				continue
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer metricsRunning.Unlock()
 				if err := metricsCollector.Collect(ctx); err != nil {
-					logger.Error("metrics collection failed", "error", err)
+					if errors.Is(err, context.Canceled) {
+						logger.Debug("metrics collection cancelled")
+					} else {
+						logger.Error("metrics collection failed", "error", err)
+					}
 				}
 			}()
 
@@ -327,11 +474,20 @@ func main() {
 				logger.Warn("skipping logs collection, API rate limited", "wait", wait.Round(time.Second))
 				continue
 			}
+			if !logsRunning.TryLock() {
+				logger.Warn("skipping logs collection, previous cycle still running")
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer logsRunning.Unlock()
 				if err := logsCollector.Collect(ctx); err != nil {
-					logger.Error("logs collection failed", "error", err)
+					if errors.Is(err, context.Canceled) {
+						logger.Debug("logs collection cancelled")
+					} else {
+						logger.Error("logs collection failed", "error", err)
+					}
 				}
 			}()
 
@@ -340,13 +496,43 @@ func main() {
 				logger.Warn("skipping discovery refresh, API rate limited", "wait", wait.Round(time.Second))
 				continue
 			}
+			if !discoveryRunning.TryLock() {
+				logger.Warn("skipping discovery refresh, previous cycle still running")
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer discoveryRunning.Unlock()
 				if err := discovery.Refresh(ctx); err != nil {
-					logger.Error("discovery refresh failed", "error", err)
+					if errors.Is(err, context.Canceled) {
+						logger.Debug("discovery refresh cancelled")
+					} else {
+						logger.Error("discovery refresh failed", "error", err)
+					}
+					return
+				}
+				// Signal the main loop to recalculate budget
+				select {
+				case discoveryDone <- struct{}{}:
+				default:
 				}
 			}()
+
+		case <-discoveryDone:
+			newBudget := calculateBudget(discovery.Targets(), len(workspaces), cfg, logger)
+			if metricsTicker != nil && significantChange(currentMetricsInterval, newBudget.metricsInterval) {
+				logger.Info("adjusted metrics interval after discovery",
+					"old", currentMetricsInterval, "new", newBudget.metricsInterval)
+				currentMetricsInterval = newBudget.metricsInterval
+				metricsTicker.Reset(currentMetricsInterval)
+			}
+			if logsTicker != nil && significantChange(currentLogsInterval, newBudget.logsInterval) {
+				logger.Info("adjusted logs interval after discovery",
+					"old", currentLogsInterval, "new", newBudget.logsInterval)
+				currentLogsInterval = newBudget.logsInterval
+				logsTicker.Reset(currentLogsInterval)
+			}
 		}
 	}
 }
