@@ -51,7 +51,9 @@ type BackfillGenerator struct {
 	logLimit        int
 	logger          *slog.Logger
 
-	nextPoll time.Time
+	nextPoll     time.Time
+	pendingItems []WorkItem      // cached items re-emitted until consumed via Deliver
+	delivered    map[string]bool // tracks which pending items have been delivered
 }
 
 // NewBackfillGenerator creates a BackfillGenerator.
@@ -129,7 +131,30 @@ func (g *BackfillGenerator) backfillMetricBatchKey(chunkStart, chunkEnd time.Tim
 // Poll scans all targets for coverage gaps, aligns them to chunk boundaries,
 // and emits WorkItems. Projects with gaps in the same chunk share a BatchKey
 // so they can be merged into one aliased request.
+//
+// Items are cached and re-emitted on subsequent ticks until consumed via
+// Deliver. The poll interval only advances once all pending items are delivered,
+// preventing work from being silently dropped when higher-priority batches win.
 func (g *BackfillGenerator) Poll(now time.Time) []WorkItem {
+	// Re-emit undelivered items from a previous poll.
+	if len(g.pendingItems) > 0 {
+		var remaining []WorkItem
+		for _, item := range g.pendingItems {
+			if !g.delivered[item.ID] {
+				remaining = append(remaining, item)
+			}
+		}
+		if len(remaining) > 0 {
+			return remaining
+		}
+		// All pending items delivered; clear state and advance the poll gate.
+		g.pendingItems = nil
+		g.delivered = nil
+		if g.interval > 0 {
+			g.nextPoll = now.Add(g.interval)
+		}
+	}
+
 	if now.Before(g.nextPoll) {
 		return nil
 	}
@@ -151,9 +176,9 @@ func (g *BackfillGenerator) Poll(now time.Time) []WorkItem {
 		return nil
 	}
 
-	if g.interval > 0 {
-		g.nextPoll = now.Add(g.interval)
-	}
+	// Cache items; nextPoll advances only when all are delivered.
+	g.pendingItems = items
+	g.delivered = make(map[string]bool, len(items))
 	return items
 }
 
@@ -317,6 +342,11 @@ func (g *BackfillGenerator) alignedChunks(gap TimeRange) []TimeRange {
 // Deliver processes results from a backfill query.
 // Routes to metric or log delivery based on WorkItem Kind.
 func (g *BackfillGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+	// Mark item as consumed so Poll stops re-emitting it.
+	if g.delivered != nil {
+		g.delivered[item.ID] = true
+	}
+
 	if err != nil {
 		g.logger.Error("backfill delivery failed",
 			"kind", item.Kind, "alias_key", item.AliasKey, "error", err)

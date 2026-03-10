@@ -96,7 +96,17 @@ func TestBackfillGenerator_PollRespectsInterval(t *testing.T) {
 	items := gen.Poll(now)
 	assert.NotNil(t, items)
 
-	// Immediate second poll should return nil (interval not elapsed)
+	// Second poll re-emits undelivered items (not nil anymore)
+	items2 := gen.Poll(now)
+	assert.NotNil(t, items2)
+	assert.Equal(t, len(items), len(items2), "should re-emit same pending items")
+
+	// Deliver all items to clear pending state
+	for _, item := range items {
+		gen.Deliver(context.Background(), item, nil, assert.AnError)
+	}
+
+	// Immediately after delivery, interval gate blocks new poll
 	items = gen.Poll(now)
 	assert.Nil(t, items)
 
