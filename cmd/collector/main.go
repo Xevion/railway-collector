@@ -24,133 +24,6 @@ import (
 	"github.com/xevion/railway-collector/internal/state"
 )
 
-// safeBudget is the maximum API calls per hour before auto-adjustment kicks in.
-const safeBudget = 900
-
-type budgetResult struct {
-	metricsInterval  time.Duration
-	logsInterval     time.Duration
-	metricsPerHour   int
-	logsPerHour      int
-	discoveryPerHour int // effective (post-cache) rate used for budgeting
-	discoveryWorst   int // worst-case rate before cache discount
-	totalPerHour     int
-}
-
-// calculateBudget estimates API calls/hour from the current target set and config,
-// then returns recommended collection intervals (auto-adjusted if the estimate
-// exceeds safeBudget). It does NOT modify cfg.
-func calculateBudget(
-	targets []collector.ServiceTarget,
-	workspaceCount int,
-	cfg *config.Config,
-	logger *slog.Logger,
-) budgetResult {
-	targetCount := len(targets)
-	envSet := make(map[string]bool)
-	for _, t := range targets {
-		envSet[t.EnvironmentID] = true
-	}
-	uniqueEnvs := len(envSet)
-	projSet := make(map[string]bool)
-	for _, t := range targets {
-		projSet[t.ProjectID] = true
-	}
-	uniqueProjects := len(projSet)
-
-	metricsInterval := cfg.Collect.Metrics.Interval
-	logsInterval := cfg.Collect.Logs.Interval
-
-	metricsCallsPerHour := 0
-	if cfg.Collect.Metrics.Enabled {
-		metricsCallsPerHour = uniqueProjects * int(time.Hour/metricsInterval)
-	}
-	logCallsPerCycle := 0
-	if cfg.Collect.Logs.Enabled {
-		logCallsPerCycle += uniqueEnvs      // environment logs
-		logCallsPerCycle += targetCount * 2 // build + http per deployment
-	}
-	logCallsPerHour := 0
-	if cfg.Collect.Logs.Enabled && logsInterval > 0 {
-		logCallsPerHour = logCallsPerCycle * int(time.Hour/logsInterval)
-	}
-
-	discoveryCallsPerHour := 0
-	if cfg.Collect.Resources.Enabled && cfg.Collect.Resources.Interval > 0 {
-		discoveryCallsPerCycle := workspaceCount + targetCount*2
-		discoveryCallsPerHour = discoveryCallsPerCycle * int(time.Hour/cfg.Collect.Resources.Interval)
-	}
-
-	// After the first cycle, ~80% of discovery calls will be cache hits.
-	// Use the effective (post-cache) rate for budget allocation.
-	effectiveDiscoveryPerHour := int(float64(discoveryCallsPerHour) * 0.2)
-
-	totalPerHour := metricsCallsPerHour + logCallsPerHour + effectiveDiscoveryPerHour
-	logger.Info("estimated API call budget",
-		"metrics_per_hour", metricsCallsPerHour,
-		"logs_per_hour", logCallsPerHour,
-		"discovery_per_hour_worst", discoveryCallsPerHour,
-		"discovery_per_hour_effective", effectiveDiscoveryPerHour,
-		"total_per_hour", totalPerHour,
-		"projects", uniqueProjects,
-		"environments", uniqueEnvs,
-		"targets", targetCount,
-	)
-
-	// Auto-adjust metrics and logs intervals if estimated budget exceeds safeBudget.
-	// Discovery is left alone since it's mostly cache hits.
-	if totalPerHour > safeBudget && (metricsCallsPerHour+logCallsPerHour) > 0 {
-		availableBudget := safeBudget - effectiveDiscoveryPerHour
-		if availableBudget <= 0 {
-			logger.Error("discovery alone exceeds API budget; cannot auto-adjust collection intervals",
-				"discovery_per_hour", effectiveDiscoveryPerHour, "budget", safeBudget)
-		} else {
-			scaleFactor := float64(metricsCallsPerHour+logCallsPerHour) / float64(availableBudget)
-			if scaleFactor < 1 {
-				scaleFactor = 1
-			}
-
-			if cfg.Collect.Metrics.Enabled {
-				orig := metricsInterval
-				metricsInterval = time.Duration(float64(orig) * scaleFactor)
-				logger.Warn("auto-adjusted metrics interval to fit API budget",
-					"original", orig, "adjusted", metricsInterval)
-			}
-			if cfg.Collect.Logs.Enabled {
-				orig := logsInterval
-				logsInterval = time.Duration(float64(orig) * scaleFactor)
-				logger.Warn("auto-adjusted logs interval to fit API budget",
-					"original", orig, "adjusted", logsInterval)
-			}
-
-			// Recalculate with adjusted intervals
-			if cfg.Collect.Metrics.Enabled {
-				metricsCallsPerHour = uniqueProjects * int(time.Hour/metricsInterval)
-			}
-			if cfg.Collect.Logs.Enabled && logsInterval > 0 {
-				logCallsPerHour = logCallsPerCycle * int(time.Hour/logsInterval)
-			}
-			totalPerHour = metricsCallsPerHour + logCallsPerHour + effectiveDiscoveryPerHour
-			logger.Info("adjusted API call budget",
-				"metrics_per_hour", metricsCallsPerHour,
-				"logs_per_hour", logCallsPerHour,
-				"discovery_per_hour", effectiveDiscoveryPerHour,
-				"total_per_hour", totalPerHour,
-			)
-		}
-	}
-
-	return budgetResult{
-		metricsInterval:  metricsInterval,
-		logsInterval:     logsInterval,
-		metricsPerHour:   metricsCallsPerHour,
-		logsPerHour:      logCallsPerHour,
-		discoveryPerHour: effectiveDiscoveryPerHour,
-		discoveryWorst:   discoveryCallsPerHour,
-		totalPerHour:     totalPerHour,
-	}
-}
-
 func main() {
 	configPath := flag.String("config", "", "path to config YAML file (default: config.yaml in working directory)")
 	flag.Parse()
@@ -176,7 +49,7 @@ func main() {
 		level = slog.LevelError
 	}
 
-	// Build handler chain: base → slog-formatter → filtering
+	// Build handler chain: base -> slog-formatter -> filtering
 	var baseHandler slog.Handler
 	if os.Getenv("LOG_JSON") == "true" {
 		baseHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
@@ -285,64 +158,78 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Calculate initial API budget and recommended intervals
-	budget := calculateBudget(discovery.Targets(), len(workspaces), cfg, logger)
-	currentMetricsInterval := budget.metricsInterval
-	currentLogsInterval := budget.logsInterval
+	// Convert measurement strings to enum values
+	measurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Measurements)
 
-	// Initialize collectors
-	var metricsCollector *collector.MetricsCollector
+	realClock := clockwork.NewRealClock()
+	now := realClock.Now()
+
+	// Build credit allocator from config
+	creditCfg := collector.CreditConfig{
+		MetricsRate:   cfg.Collect.Credits.MetricsRate,
+		LogsRate:      cfg.Collect.Credits.LogsRate,
+		DiscoveryRate: cfg.Collect.Credits.DiscoveryRate,
+		BackfillRate:  cfg.Collect.Credits.BackfillRate,
+		MaxCredits:    cfg.Collect.Credits.MaxCredits,
+	}
+	credits := collector.NewCreditAllocator(creditCfg, now)
+
+	// Build generators
+	var generators []collector.TaskGenerator
+
 	if cfg.Collect.Metrics.Enabled {
-		metricsCollector = collector.NewMetricsCollector(
-			client, discovery, sinks, store,
-			cfg.Collect.Metrics.Measurements,
-			cfg.Collect.Metrics.SampleRateSeconds,
-			cfg.Collect.Metrics.AveragingWindowSeconds,
-			cfg.Collect.Metrics.Lookback,
-			currentMetricsInterval,
-			clockwork.NewRealClock(),
-			logger,
-		)
+		generators = append(generators, collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+			Discovery:    discovery,
+			Store:        store,
+			Sinks:        sinks,
+			Clock:        realClock,
+			Measurements: measurements,
+			SampleRate:   cfg.Collect.Metrics.SampleRateSeconds,
+			AvgWindow:    cfg.Collect.Metrics.AveragingWindowSeconds,
+			Lookback:     cfg.Collect.Metrics.Lookback,
+			Interval:     cfg.Collect.Metrics.Interval,
+			Logger:       logger,
+		}))
 	}
 
-	var logsCollector *collector.LogsCollector
 	if cfg.Collect.Logs.Enabled {
-		logsCollector = collector.NewLogsCollector(
-			client, discovery, sinks,
-			cfg.Collect.Logs.Types,
-			cfg.Collect.Logs.Limit,
-			currentLogsInterval,
-			store,
-			clockwork.NewRealClock(),
-			logger,
-		)
+		generators = append(generators, collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+			Discovery: discovery,
+			Store:     store,
+			Sinks:     sinks,
+			Clock:     realClock,
+			Types:     cfg.Collect.Logs.Types,
+			Limit:     cfg.Collect.Logs.Limit,
+			Interval:  cfg.Collect.Logs.Interval,
+			Logger:    logger,
+		}))
 	}
 
-	// Backfill manager
-	var backfill collector.Collector
+	if cfg.Collect.Resources.Enabled {
+		generators = append(generators, collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
+			Discovery: discovery,
+			Interval:  cfg.Collect.Resources.Interval,
+			Logger:    logger,
+		}))
+	}
+
 	if cfg.Collect.Backfill.Enabled {
-		backfillManager := collector.NewBackfillManager(collector.BackfillConfig{
-			API:              client,
-			Store:            store,
-			Discovery:        discovery,
-			Sinks:            sinks,
-			Clock:            clockwork.NewRealClock(),
-			MetricSampleRate: cfg.Collect.Metrics.SampleRateSeconds,
-			MetricAvgWindow:  cfg.Collect.Metrics.AveragingWindowSeconds,
-			MetricRetention:  cfg.Collect.Backfill.MetricRetention,
-			LogRetention:     cfg.Collect.Backfill.LogRetention,
-			LogLimit:         cfg.Collect.Logs.Limit,
-			MaxChunksPerRun:  cfg.Collect.Backfill.MaxChunksPerRun,
-			MetricChunkSize:  cfg.Collect.Backfill.MetricChunkSize,
-			Logger:           logger,
-		})
-		backfill = backfillManager
-		logger.Info("backfill enabled",
-			"interval", cfg.Collect.Backfill.Interval,
-			"max_chunks_per_run", cfg.Collect.Backfill.MaxChunksPerRun,
-			"metric_retention", cfg.Collect.Backfill.MetricRetention,
-			"log_retention", cfg.Collect.Backfill.LogRetention,
-		)
+		generators = append(generators, collector.NewBackfillGenerator(collector.BackfillGeneratorConfig{
+			Discovery:       discovery,
+			Store:           store,
+			Sinks:           sinks,
+			Clock:           realClock,
+			Measurements:    measurements,
+			SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+			AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+			MetricRetention: cfg.Collect.Backfill.MetricRetention,
+			LogRetention:    cfg.Collect.Backfill.LogRetention,
+			ChunkSize:       cfg.Collect.Backfill.MetricChunkSize,
+			Interval:        cfg.Collect.Backfill.Interval,
+			MaxItemsPerPoll: cfg.Collect.Backfill.MaxItemsPerPoll,
+			LogLimit:        cfg.Collect.Logs.Limit,
+			Logger:          logger,
+		}))
 	}
 
 	sinkNames := make([]string, len(sinks))
@@ -352,48 +239,22 @@ func main() {
 	logger.Info("railway collector started",
 		"metrics_enabled", cfg.Collect.Metrics.Enabled,
 		"logs_enabled", cfg.Collect.Logs.Enabled,
-		"targets", len(discovery.Targets()),
-		"metrics_interval", currentMetricsInterval,
-		"logs_interval", currentLogsInterval,
 		"backfill_enabled", cfg.Collect.Backfill.Enabled,
+		"targets", len(discovery.Targets()),
+		"generators", len(generators),
 		"sinks", strings.Join(sinkNames, ","),
 	)
 
-	var discoveryInterval time.Duration
-	if cfg.Collect.Resources.Enabled {
-		discoveryInterval = cfg.Collect.Resources.Interval
-	}
-
-	// Avoid the nil-interface gotcha: a nil *MetricsCollector assigned to
-	// a Collector interface produces a non-nil interface value.
-	var metrics collector.Collector
-	if metricsCollector != nil {
-		metrics = metricsCollector
-	}
-	var logs collector.Collector
-	if logsCollector != nil {
-		logs = logsCollector
-	}
-
-	scheduler := collector.NewScheduler(collector.SchedulerConfig{
-		Clock:             clockwork.NewRealClock(),
-		API:               client,
-		Discovery:         discovery,
-		Metrics:           metrics,
-		Logs:              logs,
-		Backfill:          backfill,
-		MetricsInterval:   currentMetricsInterval,
-		LogsInterval:      currentLogsInterval,
-		DiscoveryInterval: discoveryInterval,
-		BackfillInterval:  cfg.Collect.Backfill.Interval,
-		Budget: func(targets []collector.ServiceTarget) collector.BudgetResult {
-			b := calculateBudget(targets, len(workspaces), cfg, logger)
-			return collector.BudgetResult{
-				MetricsInterval: b.metricsInterval,
-				LogsInterval:    b.logsInterval,
-			}
-		},
-		Logger: logger,
+	// Build unified scheduler
+	scheduler := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
+		Clock:        realClock,
+		API:          client,
+		Credits:      credits,
+		Generators:   generators,
+		Logger:       logger,
+		TickInterval: cfg.Collect.Scheduler.TickInterval,
+		MaxRPS:       cfg.Collect.Scheduler.MaxRPS,
+		DrainTimeout: cfg.Collect.Scheduler.DrainTimeout,
 	})
 
 	// Two-phase shutdown driven by signal handler:

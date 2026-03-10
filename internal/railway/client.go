@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -26,10 +27,11 @@ const (
 
 // Client wraps the genqlient GraphQL client with rate limiting and auth.
 type Client struct {
-	gql       graphql.Client
-	limiter   *rate.Limiter
-	transport *rateLimitTransport
-	logger    *slog.Logger
+	gql        graphql.Client
+	httpClient *http.Client
+	limiter    *rate.Limiter
+	transport  *rateLimitTransport
+	logger     *slog.Logger
 }
 
 // rateLimitTransport injects auth headers and tracks rate limit state.
@@ -51,6 +53,24 @@ var reWaitSeconds = regexp.MustCompile(`try again in ([\d.]+) seconds`)
 func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", "Bearer "+t.token)
 	req.Header.Set("Content-Type", "application/json")
+
+	// Append operationName as a URL query parameter to avoid Cloudflare's
+	// undocumented ~10 RPS rate limit on bare POST requests without query strings.
+	if req.Body != nil {
+		bodyBytes, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if err == nil {
+			var payload struct {
+				OperationName string `json:"operationName"`
+			}
+			if json.Unmarshal(bodyBytes, &payload) == nil && payload.OperationName != "" {
+				q := req.URL.Query()
+				q.Set("operationName", payload.OperationName)
+				req.URL.RawQuery = q.Encode()
+			}
+		}
+	}
 
 	resp, err := t.inner.RoundTrip(req)
 	if err != nil {
@@ -180,10 +200,11 @@ func NewClient(token string, rps float64, logger *slog.Logger) *Client {
 	}
 
 	return &Client{
-		gql:       graphql.NewClient(Endpoint, httpClient),
-		limiter:   limiter,
-		transport: transport,
-		logger:    logger,
+		gql:        graphql.NewClient(Endpoint, httpClient),
+		httpClient: httpClient,
+		limiter:    limiter,
+		transport:  transport,
+		logger:     logger,
 	}
 }
 
@@ -246,7 +267,7 @@ func do[T any](c *Client, ctx context.Context, method string, fn func() (T, erro
 		// Update rate limit state from error if applicable
 		c.wrapError(method, err)
 
-		// Don't backoff after the last attempt — we're about to exit
+		// Don't backoff after the last attempt -- we're about to exit
 		if attempt == maxAttempts-1 {
 			break
 		}
@@ -398,6 +419,68 @@ func (c *Client) GetHttpLogs(ctx context.Context, deploymentID string, limit *in
 func (c *Client) GetEnvironmentLogs(ctx context.Context, environmentID string, filter *string, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*EnvironmentLogsQueryResponse, error) {
 	return do(c, ctx, "GetEnvironmentLogs", func() (*EnvironmentLogsQueryResponse, error) {
 		return EnvironmentLogsQuery(ctx, c.gql, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
+	})
+}
+
+// RawQueryResponse holds the parsed result of a raw GraphQL query.
+// Data contains per-alias results keyed by alias name.
+// Errors contains any GraphQL-level errors from the response.
+type RawQueryResponse struct {
+	Data   map[string]json.RawMessage `json:"data"`
+	Errors []GraphQLError             `json:"errors"`
+}
+
+// GraphQLError represents a single error from a GraphQL response.
+type GraphQLError struct {
+	Message string   `json:"message"`
+	Path    []string `json:"path"`
+}
+
+// RawQuery executes an arbitrary GraphQL query string with variables and returns
+// the raw JSON response keyed by alias. This is used for batched aliased queries
+// that genqlient cannot express (dynamic number of aliases at runtime).
+// The operationName is used for logging and the Cloudflare query parameter.
+func (c *Client) RawQuery(ctx context.Context, operationName, query string, variables map[string]any) (*RawQueryResponse, error) {
+	return do(c, ctx, operationName, func() (*RawQueryResponse, error) {
+		payload := map[string]any{
+			"query":         query,
+			"operationName": operationName,
+		}
+		if len(variables) > 0 {
+			payload["variables"] = variables
+		}
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling query payload: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, Endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("executing request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading response body: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var result RawQueryResponse
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return nil, fmt.Errorf("unmarshaling response: %w", err)
+		}
+
+		return &result, nil
 	})
 }
 

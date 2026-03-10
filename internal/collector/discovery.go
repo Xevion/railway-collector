@@ -58,7 +58,7 @@ func jitteredTTL(base, jitter time.Duration) time.Duration {
 	offset := time.Duration(rand.Int64N(int64(2*jitter))) - jitter
 	ttl := base + offset
 	if ttl < time.Minute {
-		ttl = time.Minute // floor
+		ttl = time.Minute // minimum 1 minute to avoid pathologically short TTLs
 	}
 	return ttl
 }

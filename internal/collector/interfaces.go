@@ -2,10 +2,58 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/xevion/railway-collector/internal/railway"
 )
+
+// TaskType identifies the category of a scheduled work item for credit allocation.
+type TaskType int
+
+const (
+	TaskTypeMetrics TaskType = iota
+	TaskTypeLogs
+	TaskTypeDiscovery
+	TaskTypeBackfill
+)
+
+// QueryKind identifies the GraphQL root field for a work item.
+// Items with the same (QueryKind, BatchKey) can be merged into one aliased query.
+type QueryKind string
+
+const (
+	QueryMetrics         QueryKind = "metrics"
+	QueryEnvironmentLogs QueryKind = "environmentLogs"
+	QueryBuildLogs       QueryKind = "buildLogs"
+	QueryHttpLogs        QueryKind = "httpLogs"
+	QueryDiscovery       QueryKind = "discovery"
+)
+
+// WorkItem describes a unit of work that a TaskGenerator needs executed.
+// The scheduler groups compatible items (same Kind + BatchKey) into
+// batched GraphQL requests using aliases.
+type WorkItem struct {
+	// ID uniquely identifies this work item for correlating results.
+	ID string
+
+	// Kind is the GraphQL root field type.
+	Kind QueryKind
+
+	// TaskType is the credit allocation category.
+	TaskType TaskType
+
+	// AliasKey is the entity ID used as the alias key in a batched query
+	// (e.g., projectID for metrics, environmentID for env logs).
+	AliasKey string
+
+	// BatchKey is an opaque string computed by the generator.
+	// Items with the same (Kind, BatchKey) can be merged into one request.
+	BatchKey string
+
+	// Params are the query parameters for the query builder.
+	Params map[string]any
+}
 
 //go:generate mockgen -source=interfaces.go -destination=mocks/mocks.go -package=mocks
 
@@ -20,6 +68,7 @@ type RailwayAPI interface {
 	GetDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.DeploymentLogsQueryResponse, error)
 	GetBuildLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.BuildLogsQueryResponse, error)
 	GetHttpLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.HttpLogsQueryResponse, error)
+	RawQuery(ctx context.Context, operationName, query string, variables map[string]any) (*railway.RawQueryResponse, error)
 	IsRateLimited() (bool, time.Duration)
 	RateLimitInfo() (remaining int, resetAt time.Time)
 }
@@ -48,7 +97,17 @@ type TargetProvider interface {
 	Refresh(ctx context.Context) error
 }
 
-// Collector is implemented by MetricsCollector and LogsCollector.
-type Collector interface {
-	Collect(ctx context.Context) error
+// TaskGenerator produces work items describing what data it needs.
+// The scheduler polls generators, batches compatible items, executes
+// the queries, and delivers results back.
+type TaskGenerator interface {
+	// Poll returns pending work items, or nil if idle.
+	Poll(now time.Time) []WorkItem
+
+	// Deliver sends results back for a previously emitted work item.
+	// data is the per-alias JSON response; err is non-nil on query failure.
+	Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error)
+
+	// Type returns the task category for credit allocation.
+	Type() TaskType
 }

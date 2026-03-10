@@ -40,6 +40,27 @@ type CollectConfig struct {
 	Resources ResourcesCollectConfig `koanf:"resources"`
 	Discovery DiscoveryCollectConfig `koanf:"discovery"`
 	Backfill  BackfillCollectConfig  `koanf:"backfill"`
+	Scheduler SchedulerConfig        `koanf:"scheduler"`
+	Credits   CreditsConfig          `koanf:"credits"`
+}
+
+type SchedulerConfig struct {
+	// TickInterval controls how often the scheduler polls generators (default 1s)
+	TickInterval time.Duration `koanf:"tick_interval"`
+	// MaxRPS caps requests per second (default ~0.267, i.e. 16/min)
+	MaxRPS float64 `koanf:"max_rps"`
+	// DrainTimeout is how long to wait for in-flight work during shutdown (default 5s)
+	DrainTimeout time.Duration `koanf:"drain_timeout"`
+}
+
+type CreditsConfig struct {
+	// Credits per minute for each task type
+	MetricsRate   float64 `koanf:"metrics_rate"`
+	LogsRate      float64 `koanf:"logs_rate"`
+	DiscoveryRate float64 `koanf:"discovery_rate"`
+	BackfillRate  float64 `koanf:"backfill_rate"`
+	// Maximum accumulated credits per type (prevents burst after idle)
+	MaxCredits float64 `koanf:"max_credits"`
 }
 
 type BackfillCollectConfig struct {
@@ -49,6 +70,7 @@ type BackfillCollectConfig struct {
 	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
 	MetricRetention time.Duration `koanf:"metric_retention"`
 	LogRetention    time.Duration `koanf:"log_retention"`
+	MaxItemsPerPoll int           `koanf:"max_items_per_poll"`
 }
 
 type DiscoveryCollectConfig struct {
@@ -155,6 +177,17 @@ func DefaultConfig() *Config {
 				MetricChunkSize: 10 * 24 * time.Hour,
 				MetricRetention: 90 * 24 * time.Hour,
 				LogRetention:    5 * 24 * time.Hour,
+				MaxItemsPerPoll: 10,
+			},
+			Scheduler: SchedulerConfig{
+				// Zero values use code defaults (1s tick, ~16/min RPS, 5s drain)
+			},
+			Credits: CreditsConfig{
+				MetricsRate:   2.0,
+				LogsRate:      2.0,
+				DiscoveryRate: 1.0,
+				BackfillRate:  11.0,
+				MaxCredits:    4.0,
 			},
 		},
 		Sinks: SinksConfig{

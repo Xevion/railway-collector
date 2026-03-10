@@ -69,8 +69,8 @@ func (s *PrometheusSink) WriteMetrics(_ context.Context, metrics []MetricPoint) 
 }
 
 func (s *PrometheusSink) WriteLogs(_ context.Context, _ []LogEntry) error {
-	// Prometheus doesn't handle logs — this is a no-op.
-	// Logs are handled by file sink or future Loki/OTLP sinks.
+	// Prometheus doesn't handle logs -- this is a no-op.
+	// Log output is handled by the file and OTLP sinks.
 	return nil
 }
 
@@ -94,7 +94,7 @@ func (s *PrometheusSink) getOrCreateGauge(name string, labels map[string]string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Double-check
+	// Re-check under write lock (double-checked locking).
 	if g, ok := s.gauges[cacheKey]; ok {
 		return g
 	}

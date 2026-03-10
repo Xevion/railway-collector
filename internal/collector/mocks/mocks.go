@@ -11,6 +11,7 @@ package mocks
 
 import (
 	context "context"
+	json "encoding/json"
 	reflect "reflect"
 	time "time"
 
@@ -206,6 +207,21 @@ func (m *MockRailwayAPI) RateLimitInfo() (int, time.Time) {
 func (mr *MockRailwayAPIMockRecorder) RateLimitInfo() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RateLimitInfo", reflect.TypeOf((*MockRailwayAPI)(nil).RateLimitInfo))
+}
+
+// RawQuery mocks base method.
+func (m *MockRailwayAPI) RawQuery(ctx context.Context, operationName, query string, variables map[string]any) (*railway.RawQueryResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RawQuery", ctx, operationName, query, variables)
+	ret0, _ := ret[0].(*railway.RawQueryResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RawQuery indicates an expected call of RawQuery.
+func (mr *MockRailwayAPIMockRecorder) RawQuery(ctx, operationName, query, variables any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RawQuery", reflect.TypeOf((*MockRailwayAPI)(nil).RawQuery), ctx, operationName, query, variables)
 }
 
 // MockStateStore is a mock of StateStore interface.
@@ -485,40 +501,66 @@ func (mr *MockTargetProviderMockRecorder) Targets() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Targets", reflect.TypeOf((*MockTargetProvider)(nil).Targets))
 }
 
-// MockCollector is a mock of Collector interface.
-type MockCollector struct {
+// MockTaskGenerator is a mock of TaskGenerator interface.
+type MockTaskGenerator struct {
 	ctrl     *gomock.Controller
-	recorder *MockCollectorMockRecorder
+	recorder *MockTaskGeneratorMockRecorder
 	isgomock struct{}
 }
 
-// MockCollectorMockRecorder is the mock recorder for MockCollector.
-type MockCollectorMockRecorder struct {
-	mock *MockCollector
+// MockTaskGeneratorMockRecorder is the mock recorder for MockTaskGenerator.
+type MockTaskGeneratorMockRecorder struct {
+	mock *MockTaskGenerator
 }
 
-// NewMockCollector creates a new mock instance.
-func NewMockCollector(ctrl *gomock.Controller) *MockCollector {
-	mock := &MockCollector{ctrl: ctrl}
-	mock.recorder = &MockCollectorMockRecorder{mock}
+// NewMockTaskGenerator creates a new mock instance.
+func NewMockTaskGenerator(ctrl *gomock.Controller) *MockTaskGenerator {
+	mock := &MockTaskGenerator{ctrl: ctrl}
+	mock.recorder = &MockTaskGeneratorMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockCollector) EXPECT() *MockCollectorMockRecorder {
+func (m *MockTaskGenerator) EXPECT() *MockTaskGeneratorMockRecorder {
 	return m.recorder
 }
 
-// Collect mocks base method.
-func (m *MockCollector) Collect(ctx context.Context) error {
+// Deliver mocks base method.
+func (m *MockTaskGenerator) Deliver(ctx context.Context, item collector.WorkItem, data json.RawMessage, err error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Collect", ctx)
-	ret0, _ := ret[0].(error)
+	m.ctrl.Call(m, "Deliver", ctx, item, data, err)
+}
+
+// Deliver indicates an expected call of Deliver.
+func (mr *MockTaskGeneratorMockRecorder) Deliver(ctx, item, data, err any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Deliver", reflect.TypeOf((*MockTaskGenerator)(nil).Deliver), ctx, item, data, err)
+}
+
+// Poll mocks base method.
+func (m *MockTaskGenerator) Poll(now time.Time) []collector.WorkItem {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Poll", now)
+	ret0, _ := ret[0].([]collector.WorkItem)
 	return ret0
 }
 
-// Collect indicates an expected call of Collect.
-func (mr *MockCollectorMockRecorder) Collect(ctx any) *gomock.Call {
+// Poll indicates an expected call of Poll.
+func (mr *MockTaskGeneratorMockRecorder) Poll(now any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Collect", reflect.TypeOf((*MockCollector)(nil).Collect), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Poll", reflect.TypeOf((*MockTaskGenerator)(nil).Poll), now)
+}
+
+// Type mocks base method.
+func (m *MockTaskGenerator) Type() collector.TaskType {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Type")
+	ret0, _ := ret[0].(collector.TaskType)
+	return ret0
+}
+
+// Type indicates an expected call of Type.
+func (mr *MockTaskGeneratorMockRecorder) Type() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Type", reflect.TypeOf((*MockTaskGenerator)(nil).Type))
 }
