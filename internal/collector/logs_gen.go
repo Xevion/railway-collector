@@ -103,6 +103,9 @@ func (g *LogsGenerator) Type() TaskType {
 	return TaskTypeLogs
 }
 
+// NextPoll returns the earliest time this generator will produce work.
+func (g *LogsGenerator) NextPoll() time.Time { return g.nextPoll }
+
 // Poll returns WorkItems for each log type that needs fetching.
 // Environment logs: one item per unique environment.
 // Build/HTTP logs: one item per deployment with that type enabled.

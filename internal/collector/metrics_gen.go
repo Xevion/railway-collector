@@ -99,6 +99,9 @@ func (g *MetricsGenerator) Type() TaskType {
 	return TaskTypeMetrics
 }
 
+// NextPoll returns the earliest time this generator will produce work.
+func (g *MetricsGenerator) NextPoll() time.Time { return g.nextPoll }
+
 // metricsBatchKey computes the batch key from shared query parameters.
 // Items with the same batch key can be merged into one aliased request.
 func (g *MetricsGenerator) metricsBatchKey() string {

@@ -235,6 +235,7 @@ type fakeDelivery struct {
 
 func (g *fakeGenerator) Poll(_ time.Time) []collector.WorkItem { return nil }
 func (g *fakeGenerator) Type() collector.TaskType              { return g.taskType }
+func (g *fakeGenerator) NextPoll() time.Time                   { return time.Time{} }
 func (g *fakeGenerator) Deliver(_ context.Context, item collector.WorkItem, data json.RawMessage, err error) {
 	g.deliveries = append(g.deliveries, fakeDelivery{item: item, data: data, err: err})
 }

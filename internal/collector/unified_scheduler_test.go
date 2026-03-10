@@ -45,6 +45,8 @@ func (g *stubGenerator) Poll(_ time.Time) []collector.WorkItem {
 	return items
 }
 
+func (g *stubGenerator) NextPoll() time.Time { return time.Time{} }
+
 func (g *stubGenerator) Deliver(_ context.Context, item collector.WorkItem, data json.RawMessage, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

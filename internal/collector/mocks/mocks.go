@@ -537,6 +537,20 @@ func (mr *MockTaskGeneratorMockRecorder) Deliver(ctx, item, data, err any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Deliver", reflect.TypeOf((*MockTaskGenerator)(nil).Deliver), ctx, item, data, err)
 }
 
+// NextPoll mocks base method.
+func (m *MockTaskGenerator) NextPoll() time.Time {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NextPoll")
+	ret0, _ := ret[0].(time.Time)
+	return ret0
+}
+
+// NextPoll indicates an expected call of NextPoll.
+func (mr *MockTaskGeneratorMockRecorder) NextPoll() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextPoll", reflect.TypeOf((*MockTaskGenerator)(nil).NextPoll))
+}
+
 // Poll mocks base method.
 func (m *MockTaskGenerator) Poll(now time.Time) []collector.WorkItem {
 	m.ctrl.T.Helper()

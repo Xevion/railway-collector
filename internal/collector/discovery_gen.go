@@ -44,6 +44,9 @@ func (g *DiscoveryGenerator) Type() TaskType {
 	return TaskTypeDiscovery
 }
 
+// NextPoll returns the earliest time this generator will produce work.
+func (g *DiscoveryGenerator) NextPoll() time.Time { return g.nextPoll }
+
 // Poll returns a single WorkItem when discovery refresh is due.
 func (g *DiscoveryGenerator) Poll(now time.Time) []WorkItem {
 	if now.Before(g.nextPoll) {

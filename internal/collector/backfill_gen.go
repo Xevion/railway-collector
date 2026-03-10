@@ -135,6 +135,9 @@ func (g *BackfillGenerator) backfillMetricBatchKey(chunkStart, chunkEnd time.Tim
 // Items are cached and re-emitted on subsequent ticks until consumed via
 // Deliver. The poll interval only advances once all pending items are delivered,
 // preventing work from being silently dropped when higher-priority batches win.
+// NextPoll returns the earliest time this generator will produce work.
+func (g *BackfillGenerator) NextPoll() time.Time { return g.nextPoll }
+
 func (g *BackfillGenerator) Poll(now time.Time) []WorkItem {
 	// Re-emit undelivered items from a previous poll.
 	if len(g.pendingItems) > 0 {

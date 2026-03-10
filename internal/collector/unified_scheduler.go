@@ -44,6 +44,8 @@ type UnifiedScheduler struct {
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	lastIdleLog time.Time // last time we logged an idle message
 }
 
 // NewUnifiedScheduler creates a new scheduler. The rate limiter is initialized
@@ -120,6 +122,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	if len(allItems) == 0 {
+		s.logIdleStatus(now)
 		return
 	}
 
@@ -138,6 +141,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 		}
 	}
 	if selected == nil {
+		s.logIdleStatus(now)
 		return
 	}
 
@@ -200,6 +204,41 @@ func (s *UnifiedScheduler) handleDiscovery(ctx context.Context, batch Batch, gen
 	} else {
 		s.cfg.Logger.Error("discovery generator does not support Refresh")
 	}
+}
+
+const idleLogInterval = 30 * time.Second
+
+// logIdleStatus logs a periodic summary of why the scheduler is idle,
+// including each generator's next expected poll time.
+func (s *UnifiedScheduler) logIdleStatus(now time.Time) {
+	if now.Sub(s.lastIdleLog) < idleLogInterval {
+		return
+	}
+	s.lastIdleLog = now
+
+	// Find the earliest next poll across all generators.
+	var earliest time.Time
+	attrs := make([]any, 0, len(s.cfg.Generators)*2)
+	for _, gen := range s.cfg.Generators {
+		np := gen.NextPoll()
+		if np.IsZero() {
+			attrs = append(attrs, gen.Type().String(), "ready")
+		} else if np.After(now) {
+			wait := np.Sub(now).Truncate(time.Second)
+			attrs = append(attrs, gen.Type().String(), wait.String())
+			if earliest.IsZero() || np.Before(earliest) {
+				earliest = np
+			}
+		} else {
+			attrs = append(attrs, gen.Type().String(), "ready")
+		}
+	}
+
+	if !earliest.IsZero() {
+		wait := earliest.Sub(now).Truncate(time.Second)
+		attrs = append(attrs, "next_work_in", wait.String())
+	}
+	s.cfg.Logger.Info("scheduler idle, waiting for next cycle", attrs...)
 }
 
 // updateRateState checks the API's rate limit info and adjusts the credit

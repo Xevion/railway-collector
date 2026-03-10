@@ -18,6 +18,22 @@ const (
 	TaskTypeBackfill
 )
 
+// String returns a human-readable name for the task type.
+func (t TaskType) String() string {
+	switch t {
+	case TaskTypeMetrics:
+		return "metrics"
+	case TaskTypeLogs:
+		return "logs"
+	case TaskTypeDiscovery:
+		return "discovery"
+	case TaskTypeBackfill:
+		return "backfill"
+	default:
+		return "unknown"
+	}
+}
+
 // QueryKind identifies the GraphQL root field for a work item.
 // Items with the same (QueryKind, BatchKey) can be merged into one aliased query.
 type QueryKind string
@@ -110,4 +126,8 @@ type TaskGenerator interface {
 
 	// Type returns the task category for credit allocation.
 	Type() TaskType
+
+	// NextPoll returns the earliest time this generator will produce work.
+	// Returns the zero time if the generator has no scheduled poll.
+	NextPoll() time.Time
 }
