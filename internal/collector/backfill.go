@@ -65,6 +65,12 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// Build a scoped logger; backfill is always "backfill" but honour any injected trigger.
+	logger := bm.cfg.Logger
+	if trigger := triggerFromCtx(ctx); trigger != "" {
+		logger = logger.With("trigger", trigger)
+	}
+
 	start := time.Now()
 
 	projectNames := make(map[string]string)
@@ -90,7 +96,7 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 		envSet[t.EnvironmentID] = append(envSet[t.EnvironmentID], t)
 	}
 
-	bm.cfg.Logger.Info("backfill started", "projects", len(projectIDs), "environments", len(envSet))
+	logger.Info("backfill started", "projects", len(projectIDs), "environments", len(envSet))
 
 	for _, projectID := range projectIDs {
 		if chunksUsed >= bm.cfg.MaxChunksPerRun {
@@ -100,7 +106,7 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 		coverageKey := CoverageKey(projectID, "metric")
 		existing, err := LoadCoverage(bm.cfg.Store, coverageKey)
 		if err != nil {
-			bm.cfg.Logger.Warn("failed to load metric coverage for backfill",
+			logger.Warn("failed to load metric coverage for backfill",
 				"project", projectNames[projectID], "project_id", projectID, "error", err)
 			continue
 		}
@@ -128,13 +134,13 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 
 				points, err := bm.backfillMetricChunk(ctx, projectID, chunk, targets)
 				if err != nil {
-					bm.cfg.Logger.Warn("metric backfill chunk failed",
+					logger.Warn("metric backfill chunk failed",
 						"project", projectNames[projectID], "project_id", projectID, "start", chunk.Start, "end", chunk.End, "error", err)
 					continue
 				}
 				chunksUsed++
 				totalMetricPoints += len(points)
-				bm.cfg.Logger.Info("backfill metric chunk complete",
+				logger.Info("backfill metric chunk complete",
 					"project", projectNames[projectID], "project_id", projectID,
 					"start", chunk.Start, "end", chunk.End,
 					"points", len(points),
@@ -143,9 +149,9 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 				if len(points) > 0 {
 					for _, s := range bm.cfg.Sinks {
 						if err := s.WriteMetrics(ctx, points); err != nil {
-							bm.cfg.Logger.Error("failed to write backfill metrics", "sink", s.Name(), "project", projectNames[projectID], "project_id", projectID, "points", len(points), "error", err)
+							logger.Error("failed to write backfill metrics", "sink", s.Name(), "project", projectNames[projectID], "project_id", projectID, "points", len(points), "error", err)
 						} else {
-							bm.cfg.Logger.Debug("wrote backfill metrics to sink", "sink", s.Name(), "points", len(points))
+							logger.Debug("wrote backfill metrics to sink", "sink", s.Name(), "points", len(points))
 						}
 					}
 				}
@@ -160,7 +166,7 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 				})
 				existing = updated
 				if err := SaveCoverage(bm.cfg.Store, coverageKey, updated); err != nil {
-					bm.cfg.Logger.Warn("failed to save backfill coverage", "project", projectNames[projectID], "project_id", projectID, "error", err)
+					logger.Warn("failed to save backfill coverage", "project", projectNames[projectID], "project_id", projectID, "error", err)
 				}
 			}
 		}
@@ -180,7 +186,7 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 		coverageKey := CoverageKey(envID, "log", "environment")
 		existing, err := LoadCoverage(bm.cfg.Store, coverageKey)
 		if err != nil {
-			bm.cfg.Logger.Warn("failed to load log coverage for backfill", "environment", envNames[envID], "environment_id", envID, "error", err)
+			logger.Warn("failed to load log coverage for backfill", "environment", envNames[envID], "environment_id", envID, "error", err)
 			continue
 		}
 
@@ -197,12 +203,12 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 
 			entries, err := bm.backfillEnvLogChunk(ctx, envID, gap, envTargets)
 			if err != nil {
-				bm.cfg.Logger.Warn("env log backfill failed", "environment", envNames[envID], "environment_id", envID, "error", err)
+				logger.Warn("env log backfill failed", "environment", envNames[envID], "environment_id", envID, "error", err)
 				continue
 			}
 			chunksUsed++
 			totalLogEntries += len(entries)
-			bm.cfg.Logger.Info("backfill log chunk complete",
+			logger.Info("backfill log chunk complete",
 				"environment", envNames[envID], "environment_id", envID,
 				"start", gap.Start, "end", gap.End,
 				"entries", len(entries),
@@ -211,9 +217,9 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 			if len(entries) > 0 {
 				for _, s := range bm.cfg.Sinks {
 					if err := s.WriteLogs(ctx, entries); err != nil {
-						bm.cfg.Logger.Error("failed to write backfill logs", "sink", s.Name(), "environment", envNames[envID], "environment_id", envID, "entries", len(entries), "error", err)
+						logger.Error("failed to write backfill logs", "sink", s.Name(), "environment", envNames[envID], "environment_id", envID, "entries", len(entries), "error", err)
 					} else {
-						bm.cfg.Logger.Debug("wrote backfill logs to sink", "sink", s.Name(), "entries", len(entries))
+						logger.Debug("wrote backfill logs to sink", "sink", s.Name(), "entries", len(entries))
 					}
 				}
 			}
@@ -225,15 +231,15 @@ func (bm *BackfillManager) RunOnce(ctx context.Context) error {
 			updated := InsertInterval(existing, CoverageInterval{Start: gap.Start, End: gap.End, Kind: kind})
 			existing = updated
 			if err := SaveCoverage(bm.cfg.Store, coverageKey, updated); err != nil {
-				bm.cfg.Logger.Warn("failed to save log backfill coverage", "environment", envNames[envID], "environment_id", envID, "error", err)
+				logger.Warn("failed to save log backfill coverage", "environment", envNames[envID], "environment_id", envID, "error", err)
 			}
 		}
 	}
 
 	if chunksUsed == 0 {
-		bm.cfg.Logger.Debug("backfill skipped, no gaps found")
+		logger.Debug("backfill skipped, no gaps found")
 	} else {
-		bm.cfg.Logger.Info("backfill complete",
+		logger.Info("backfill complete",
 			"chunks_processed", chunksUsed,
 			"metric_points", totalMetricPoints,
 			"log_entries", totalLogEntries,

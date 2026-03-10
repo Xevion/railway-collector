@@ -108,8 +108,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	var metricsRunning, logsRunning, discoveryRunning, backfillRunning sync.Mutex
 
 	// Fire immediate collection on start
-	s.fireCollector(ctx, s.cfg.Metrics, &metricsRunning, &wg, "metrics")
-	s.fireCollector(ctx, s.cfg.Logs, &logsRunning, &wg, "logs")
+	s.fireCollector(ctx, s.cfg.Metrics, &metricsRunning, &wg, "metrics", "startup")
+	s.fireCollector(ctx, s.cfg.Logs, &logsRunning, &wg, "logs", "startup")
+	s.fireCollector(ctx, s.cfg.Backfill, &backfillRunning, &wg, "backfill", "startup")
 
 	for {
 		select {
@@ -146,7 +147,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				)
 				continue
 			}
-			s.fireCollector(ctx, s.cfg.Metrics, &metricsRunning, &wg, "metrics")
+			s.fireCollector(ctx, s.cfg.Metrics, &metricsRunning, &wg, "metrics", "scheduled")
 
 		case <-logsCh:
 			if limited, _ := s.cfg.API.IsRateLimited(); limited {
@@ -158,7 +159,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				)
 				continue
 			}
-			s.fireCollector(ctx, s.cfg.Logs, &logsRunning, &wg, "logs")
+			s.fireCollector(ctx, s.cfg.Logs, &logsRunning, &wg, "logs", "scheduled")
 
 		case <-backfillCh:
 			if limited, _ := s.cfg.API.IsRateLimited(); limited {
@@ -170,7 +171,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				)
 				continue
 			}
-			s.fireCollector(ctx, s.cfg.Backfill, &backfillRunning, &wg, "backfill")
+			s.fireCollector(ctx, s.cfg.Backfill, &backfillRunning, &wg, "backfill", "scheduled")
 
 		case <-discoveryCh:
 			if limited, _ := s.cfg.API.IsRateLimited(); limited {
@@ -230,20 +231,24 @@ func (s *Scheduler) Stop() {
 }
 
 // fireCollector launches a collection goroutine with overlap protection.
-func (s *Scheduler) fireCollector(ctx context.Context, c Collector, running *sync.Mutex, wg *sync.WaitGroup, name string) {
+// trigger describes why this collection was initiated ("startup", "scheduled", etc.)
+// and is embedded in the context so collectors can include it in their log output.
+func (s *Scheduler) fireCollector(ctx context.Context, c Collector, running *sync.Mutex, wg *sync.WaitGroup, name, trigger string) {
 	if c == nil {
 		return
 	}
 	if !running.TryLock() {
-		s.cfg.Logger.Warn("skipping collection, previous cycle still running", "collector", name)
+		s.cfg.Logger.Warn("skipping collection, previous cycle still running", "collector", name, "trigger", trigger)
 		return
 	}
+	s.cfg.Logger.Debug("firing collection", "collector", name, "trigger", trigger)
 	wg.Add(1)
+	triggerCtx := withTrigger(ctx, trigger)
 	go func() {
 		defer wg.Done()
 		defer running.Unlock()
-		if err := c.Collect(ctx); err != nil {
-			s.cfg.Logger.Error("collection failed", "collector", name, "error", err)
+		if err := c.Collect(triggerCtx); err != nil {
+			s.cfg.Logger.Error("collection failed", "collector", name, "trigger", trigger, "error", err)
 		}
 	}()
 }
