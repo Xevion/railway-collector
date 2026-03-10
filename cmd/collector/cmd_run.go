@@ -203,10 +203,10 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		}))
 	}
 
-	if cfg.Collect.Resources.Enabled {
+	if cfg.Collect.Discovery.RefreshEnabled {
 		generators = append(generators, collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
 			Discovery: discovery,
-			Interval:  cfg.Collect.Resources.Interval,
+			Interval:  cfg.Collect.Discovery.RefreshInterval,
 			Logger:    logger,
 		}))
 	}

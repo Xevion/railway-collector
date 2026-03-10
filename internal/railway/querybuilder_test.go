@@ -97,17 +97,3 @@ func TestBuildBatchEnvironmentLogsQuery(t *testing.T) {
 	assert.Equal(t, "2024-01-01T00:00:00Z", vars["afterDate"])
 	assert.Equal(t, 500, vars["afterLimit"])
 }
-
-func TestSanitizeAlias_RoundTrip(t *testing.T) {
-	// Standard UUID
-	id := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-	alias := "p_" + strings.ReplaceAll(id, "-", "_")
-	recovered := railway.AliasToID(alias)
-	assert.Equal(t, id, recovered)
-}
-
-func TestAliasToID_NonUUID(t *testing.T) {
-	// Non-UUID ID (not 32 hex chars) falls back to simple replacement
-	recovered := railway.AliasToID("p_short_id")
-	assert.Equal(t, "short-id", recovered)
-}

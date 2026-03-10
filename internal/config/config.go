@@ -37,7 +37,6 @@ type RailwayConfig struct {
 type CollectConfig struct {
 	Metrics   MetricsCollectConfig   `koanf:"metrics"`
 	Logs      LogsCollectConfig      `koanf:"logs"`
-	Resources ResourcesCollectConfig `koanf:"resources"`
 	Discovery DiscoveryCollectConfig `koanf:"discovery"`
 	Backfill  BackfillCollectConfig  `koanf:"backfill"`
 	Scheduler SchedulerConfig        `koanf:"scheduler"`
@@ -66,7 +65,6 @@ type CreditsConfig struct {
 type BackfillCollectConfig struct {
 	Enabled         bool          `koanf:"enabled"`
 	Interval        time.Duration `koanf:"interval"`
-	MaxChunksPerRun int           `koanf:"max_chunks_per_run"`
 	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
 	MetricRetention time.Duration `koanf:"metric_retention"`
 	LogRetention    time.Duration `koanf:"log_retention"`
@@ -74,6 +72,10 @@ type BackfillCollectConfig struct {
 }
 
 type DiscoveryCollectConfig struct {
+	// Whether periodic discovery refresh is enabled (default true)
+	RefreshEnabled bool `koanf:"refresh_enabled"`
+	// How often to run periodic discovery refresh (default 2h)
+	RefreshInterval time.Duration `koanf:"refresh_interval"`
 	// Base TTL for workspace list cache (default 1h)
 	WorkspaceTTL time.Duration `koanf:"workspace_ttl"`
 	// Base TTL for per-project discovery cache (default 1h)
@@ -100,11 +102,6 @@ type LogsCollectConfig struct {
 	Types    []string      `koanf:"types"`
 	// Max logs per query
 	Limit int `koanf:"limit"`
-}
-
-type ResourcesCollectConfig struct {
-	Enabled  bool          `koanf:"enabled"`
-	Interval time.Duration `koanf:"interval"`
 }
 
 type FiltersConfig struct {
@@ -160,20 +157,17 @@ func DefaultConfig() *Config {
 				Types:    []string{"deployment", "build", "http"},
 				Limit:    500,
 			},
-			Resources: ResourcesCollectConfig{
-				Enabled:  true,
-				Interval: 2 * time.Hour,
-			},
 			Discovery: DiscoveryCollectConfig{
-				WorkspaceTTL:   time.Hour,
-				ProjectTTL:     time.Hour,
-				ProjectListTTL: 4 * time.Hour,
-				Jitter:         15 * time.Minute,
+				RefreshEnabled:  true,
+				RefreshInterval: 2 * time.Hour,
+				WorkspaceTTL:    time.Hour,
+				ProjectTTL:      time.Hour,
+				ProjectListTTL:  4 * time.Hour,
+				Jitter:          15 * time.Minute,
 			},
 			Backfill: BackfillCollectConfig{
 				Enabled:         true,
 				Interval:        30 * time.Minute,
-				MaxChunksPerRun: 3,
 				MetricChunkSize: 10 * 24 * time.Hour,
 				MetricRetention: 90 * 24 * time.Hour,
 				LogRetention:    5 * 24 * time.Hour,

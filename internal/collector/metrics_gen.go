@@ -31,6 +31,44 @@ type rawMetricsTags struct {
 	Region               *string `json:"region"`
 }
 
+// buildMetricLabels builds metric labels from raw JSON tags, enriching with
+// target names where possible. includeDeploymentID controls whether the
+// deployment_id tag is copied (live metrics include it, backfill does not).
+func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget, backfill, includeDeploymentID bool) map[string]string {
+	labels := map[string]string{"backfill": "false"}
+	if backfill {
+		labels["backfill"] = "true"
+	}
+
+	if tags.ProjectID != nil {
+		labels["project_id"] = *tags.ProjectID
+	}
+	if tags.ServiceID != nil {
+		labels["service_id"] = *tags.ServiceID
+	}
+	if tags.EnvironmentID != nil {
+		labels["environment_id"] = *tags.EnvironmentID
+	}
+	if includeDeploymentID && tags.DeploymentID != nil {
+		labels["deployment_id"] = *tags.DeploymentID
+	}
+	if tags.Region != nil {
+		labels["region"] = *tags.Region
+	}
+
+	for _, t := range targets {
+		if tags.ServiceID != nil && t.ServiceID == *tags.ServiceID &&
+			tags.EnvironmentID != nil && t.EnvironmentID == *tags.EnvironmentID {
+			labels["project_name"] = t.ProjectName
+			labels["service_name"] = t.ServiceName
+			labels["environment_name"] = t.EnvironmentName
+			break
+		}
+	}
+
+	return labels
+}
+
 type rawMetricValue struct {
 	Ts    int     `json:"ts"`
 	Value float64 `json:"value"`
@@ -257,35 +295,7 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 // buildLabelsFromRaw builds metric labels from raw JSON tags,
 // enriching with target names where possible.
 func (g *MetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	labels := map[string]string{"backfill": "false"}
-
-	if tags.ProjectID != nil {
-		labels["project_id"] = *tags.ProjectID
-	}
-	if tags.ServiceID != nil {
-		labels["service_id"] = *tags.ServiceID
-	}
-	if tags.EnvironmentID != nil {
-		labels["environment_id"] = *tags.EnvironmentID
-	}
-	if tags.DeploymentID != nil {
-		labels["deployment_id"] = *tags.DeploymentID
-	}
-	if tags.Region != nil {
-		labels["region"] = *tags.Region
-	}
-
-	for _, t := range targets {
-		if tags.ServiceID != nil && t.ServiceID == *tags.ServiceID &&
-			tags.EnvironmentID != nil && t.EnvironmentID == *tags.EnvironmentID {
-			labels["project_name"] = t.ProjectName
-			labels["service_name"] = t.ServiceName
-			labels["environment_name"] = t.EnvironmentName
-			break
-		}
-	}
-
-	return labels
+	return buildMetricLabels(tags, targets, false, true)
 }
 
 // rawMeasurementToPrometheusName converts a raw measurement string

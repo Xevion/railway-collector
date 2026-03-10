@@ -233,17 +233,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	envID := item.AliasKey
 	targets := g.discovery.Targets()
 
-	// Build service lookup for this environment
-	services := make(map[string]ServiceTarget)
-	envName := ""
-	for _, t := range targets {
-		if t.EnvironmentID == envID {
-			services[t.ServiceID] = t
-			if envName == "" {
-				envName = t.EnvironmentName
-			}
-		}
-	}
+	services, envName := environmentServiceLookup(envID, targets)
 
 	var rawLogs []rawLogEntry
 	if unmarshalErr := json.Unmarshal(data, &rawLogs); unmarshalErr != nil {
@@ -364,27 +354,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 
 func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
 	deploymentID := item.AliasKey
-	targets := g.discovery.Targets()
-
-	// Find the target for this deployment
-	var baseLabels map[string]string
-	for _, t := range targets {
-		if t.DeploymentID == deploymentID {
-			baseLabels = map[string]string{
-				"project_id":       t.ProjectID,
-				"project_name":     t.ProjectName,
-				"service_id":       t.ServiceID,
-				"service_name":     t.ServiceName,
-				"environment_id":   t.EnvironmentID,
-				"environment_name": t.EnvironmentName,
-				"deployment_id":    t.DeploymentID,
-			}
-			break
-		}
-	}
-	if baseLabels == nil {
-		baseLabels = map[string]string{"deployment_id": deploymentID}
-	}
+	baseLabels := deploymentBaseLabels(deploymentID, g.discovery.Targets())
 
 	var rawLogs []rawLogEntry
 	if unmarshalErr := json.Unmarshal(data, &rawLogs); unmarshalErr != nil {
@@ -448,26 +418,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 
 func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
 	deploymentID := item.AliasKey
-	targets := g.discovery.Targets()
-
-	var baseLabels map[string]string
-	for _, t := range targets {
-		if t.DeploymentID == deploymentID {
-			baseLabels = map[string]string{
-				"project_id":       t.ProjectID,
-				"project_name":     t.ProjectName,
-				"service_id":       t.ServiceID,
-				"service_name":     t.ServiceName,
-				"environment_id":   t.EnvironmentID,
-				"environment_name": t.EnvironmentName,
-				"deployment_id":    t.DeploymentID,
-			}
-			break
-		}
-	}
-	if baseLabels == nil {
-		baseLabels = map[string]string{"deployment_id": deploymentID}
-	}
+	baseLabels := deploymentBaseLabels(deploymentID, g.discovery.Targets())
 
 	var rawLogs []rawHttpLogEntry
 	if unmarshalErr := json.Unmarshal(data, &rawLogs); unmarshalErr != nil {

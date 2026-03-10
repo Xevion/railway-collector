@@ -44,36 +44,6 @@ func (m *MockRailwayAPI) EXPECT() *MockRailwayAPIMockRecorder {
 	return m.recorder
 }
 
-// GetBuildLogs mocks base method.
-func (m *MockRailwayAPI) GetBuildLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.BuildLogsQueryResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBuildLogs", ctx, deploymentID, limit, startDate, endDate, filter)
-	ret0, _ := ret[0].(*railway.BuildLogsQueryResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetBuildLogs indicates an expected call of GetBuildLogs.
-func (mr *MockRailwayAPIMockRecorder) GetBuildLogs(ctx, deploymentID, limit, startDate, endDate, filter any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBuildLogs", reflect.TypeOf((*MockRailwayAPI)(nil).GetBuildLogs), ctx, deploymentID, limit, startDate, endDate, filter)
-}
-
-// GetDeploymentLogs mocks base method.
-func (m *MockRailwayAPI) GetDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.DeploymentLogsQueryResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDeploymentLogs", ctx, deploymentID, limit, startDate, endDate, filter)
-	ret0, _ := ret[0].(*railway.DeploymentLogsQueryResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetDeploymentLogs indicates an expected call of GetDeploymentLogs.
-func (mr *MockRailwayAPIMockRecorder) GetDeploymentLogs(ctx, deploymentID, limit, startDate, endDate, filter any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDeploymentLogs", reflect.TypeOf((*MockRailwayAPI)(nil).GetDeploymentLogs), ctx, deploymentID, limit, startDate, endDate, filter)
-}
-
 // GetDeployments mocks base method.
 func (m *MockRailwayAPI) GetDeployments(ctx context.Context, projectID, envID, serviceID string, first *int, after *string) (*railway.DeploymentsResponse, error) {
 	m.ctrl.T.Helper()
@@ -87,51 +57,6 @@ func (m *MockRailwayAPI) GetDeployments(ctx context.Context, projectID, envID, s
 func (mr *MockRailwayAPIMockRecorder) GetDeployments(ctx, projectID, envID, serviceID, first, after any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDeployments", reflect.TypeOf((*MockRailwayAPI)(nil).GetDeployments), ctx, projectID, envID, serviceID, first, after)
-}
-
-// GetEnvironmentLogs mocks base method.
-func (m *MockRailwayAPI) GetEnvironmentLogs(ctx context.Context, environmentID string, filter, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*railway.EnvironmentLogsQueryResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetEnvironmentLogs", ctx, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
-	ret0, _ := ret[0].(*railway.EnvironmentLogsQueryResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetEnvironmentLogs indicates an expected call of GetEnvironmentLogs.
-func (mr *MockRailwayAPIMockRecorder) GetEnvironmentLogs(ctx, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEnvironmentLogs", reflect.TypeOf((*MockRailwayAPI)(nil).GetEnvironmentLogs), ctx, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
-}
-
-// GetHttpLogs mocks base method.
-func (m *MockRailwayAPI) GetHttpLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*railway.HttpLogsQueryResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHttpLogs", ctx, deploymentID, limit, startDate, endDate, filter)
-	ret0, _ := ret[0].(*railway.HttpLogsQueryResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetHttpLogs indicates an expected call of GetHttpLogs.
-func (mr *MockRailwayAPIMockRecorder) GetHttpLogs(ctx, deploymentID, limit, startDate, endDate, filter any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHttpLogs", reflect.TypeOf((*MockRailwayAPI)(nil).GetHttpLogs), ctx, deploymentID, limit, startDate, endDate, filter)
-}
-
-// GetMetrics mocks base method.
-func (m *MockRailwayAPI) GetMetrics(ctx context.Context, projectID, serviceID, envID *string, startDate string, endDate *string, measurements []railway.MetricMeasurement, groupBy []railway.MetricTag, sampleRate, avgWindow *int) (*railway.MetricsResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMetrics", ctx, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
-	ret0, _ := ret[0].(*railway.MetricsResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetMetrics indicates an expected call of GetMetrics.
-func (mr *MockRailwayAPIMockRecorder) GetMetrics(ctx, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetrics", reflect.TypeOf((*MockRailwayAPI)(nil).GetMetrics), ctx, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
 }
 
 // GetProjects mocks base method.

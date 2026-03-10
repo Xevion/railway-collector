@@ -45,8 +45,8 @@ type cachedEntry[T any] struct {
 	expiresAt time.Time
 }
 
-func (c *cachedEntry[T]) expired() bool {
-	return time.Now().After(c.expiresAt)
+func (c *cachedEntry[T]) expiredAt(now time.Time) bool {
+	return now.After(c.expiresAt)
 }
 
 // jitteredTTL returns baseTTL ± jitter (uniform random).
@@ -294,7 +294,7 @@ func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]Cac
 	defer d.projListMu.Unlock()
 
 	// Check in-memory cache first
-	if cached, ok := d.projListCache[ws.ID]; ok && !cached.expired() {
+	if cached, ok := d.projListCache[ws.ID]; ok && !cached.expiredAt(d.clock.Now()) {
 		d.logger.Debug("using cached project list", "workspace", ws.Name,
 			"ttl", time.Until(cached.expiresAt).Round(time.Second))
 		return cached.data, nil
@@ -394,7 +394,7 @@ func (d *Discovery) resolveWorkspaces(ctx context.Context) ([]Workspace, error) 
 	d.wsMu.Lock()
 	defer d.wsMu.Unlock()
 
-	if d.wsCache != nil && !d.wsCache.expired() {
+	if d.wsCache != nil && !d.wsCache.expiredAt(d.clock.Now()) {
 		d.logger.Debug("using cached workspace list", "ttl", time.Until(d.wsCache.expiresAt).Round(time.Second))
 		return d.wsCache.data, nil
 	}

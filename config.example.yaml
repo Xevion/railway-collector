@@ -46,12 +46,11 @@ collect:
     # Max log entries per query.
     limit: 500
 
-  resources:
-    enabled: true
-    # How often to re-discover projects, services, environments.
-    interval: 30m
-
   discovery:
+    # Whether periodic discovery refresh is enabled.
+    refresh_enabled: true
+    # How often to re-discover projects, services, environments.
+    refresh_interval: 30m
     # Cache TTL for workspace list (discovered via Me query).
     workspace_ttl: 1h
     # Cache TTL for per-project discovery (services, envs, deployments).

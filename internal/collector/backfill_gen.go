@@ -451,19 +451,8 @@ func (g *BackfillGenerator) deliverMetrics(ctx context.Context, item WorkItem, d
 
 func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
 	envID := item.AliasKey
-	targets := g.discovery.Targets()
 
-	// Build service lookup for this environment
-	services := make(map[string]ServiceTarget)
-	envName := ""
-	for _, t := range targets {
-		if t.EnvironmentID == envID {
-			services[t.ServiceID] = t
-			if envName == "" {
-				envName = t.EnvironmentName
-			}
-		}
-	}
+	services, envName := environmentServiceLookup(envID, g.discovery.Targets())
 
 	var rawLogs []rawLogEntry
 	if unmarshalErr := json.Unmarshal(data, &rawLogs); unmarshalErr != nil {
@@ -560,30 +549,5 @@ func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, d
 // buildBackfillLabelsFromRaw builds metric labels from raw JSON tags
 // with backfill=true, enriching with target names.
 func (g *BackfillGenerator) buildBackfillLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	labels := map[string]string{"backfill": "true"}
-
-	if tags.ProjectID != nil {
-		labels["project_id"] = *tags.ProjectID
-	}
-	if tags.ServiceID != nil {
-		labels["service_id"] = *tags.ServiceID
-	}
-	if tags.EnvironmentID != nil {
-		labels["environment_id"] = *tags.EnvironmentID
-	}
-	if tags.Region != nil {
-		labels["region"] = *tags.Region
-	}
-
-	for _, t := range targets {
-		if tags.ServiceID != nil && t.ServiceID == *tags.ServiceID &&
-			tags.EnvironmentID != nil && t.EnvironmentID == *tags.EnvironmentID {
-			labels["project_name"] = t.ProjectName
-			labels["service_name"] = t.ServiceName
-			labels["environment_name"] = t.EnvironmentName
-			break
-		}
-	}
-
-	return labels
+	return buildMetricLabels(tags, targets, true, false)
 }

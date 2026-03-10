@@ -213,34 +213,3 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 		ca.pools[TaskTypeBackfill].setRate(ca.config.BackfillRate)
 	}
 }
-
-// SelectBestType picks the highest-priority task type that has available credits.
-// Priority order: Metrics > Logs > Discovery > Backfill.
-// Returns the task type and true, or zero value and false if nothing has credits.
-func (ca *CreditAllocator) SelectBestType(candidates []TaskType, now time.Time) (TaskType, bool) {
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	// Priority ordering
-	priority := []TaskType{TaskTypeMetrics, TaskTypeLogs, TaskTypeDiscovery, TaskTypeBackfill}
-
-	candidateSet := make(map[TaskType]bool, len(candidates))
-	for _, c := range candidates {
-		candidateSet[c] = true
-	}
-
-	for _, tt := range priority {
-		if !candidateSet[tt] {
-			continue
-		}
-		pool, ok := ca.pools[tt]
-		if !ok {
-			continue
-		}
-		if pool.available(now) >= 1.0 {
-			return tt, true
-		}
-	}
-
-	return 0, false
-}

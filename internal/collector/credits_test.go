@@ -90,37 +90,3 @@ func TestCreditAllocator_ScarceDisablesBackfill(t *testing.T) {
 	// Metrics should still accumulate
 	assert.True(t, ca.Available(collector.TaskTypeMetrics, later) >= 1.0)
 }
-
-func TestCreditAllocator_SelectBestType(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
-
-	// All types have 1 initial credit; metrics has highest priority
-	candidates := []collector.TaskType{
-		collector.TaskTypeBackfill,
-		collector.TaskTypeMetrics,
-		collector.TaskTypeLogs,
-	}
-	best, ok := ca.SelectBestType(candidates, now)
-	assert.True(t, ok)
-	assert.Equal(t, collector.TaskTypeMetrics, best)
-}
-
-func TestCreditAllocator_SelectBestType_FallsThrough(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
-
-	// Drain metrics credit
-	ca.TryDeduct(collector.TaskTypeMetrics, now)
-
-	// Now should fall through to logs
-	candidates := []collector.TaskType{
-		collector.TaskTypeMetrics,
-		collector.TaskTypeLogs,
-	}
-	best, ok := ca.SelectBestType(candidates, now)
-	assert.True(t, ok)
-	assert.Equal(t, collector.TaskTypeLogs, best)
-}

@@ -251,16 +251,3 @@ func BuildBatchEnvironmentLogsQuery(
 func SanitizeAlias(id string) string {
 	return "p_" + strings.ReplaceAll(id, "-", "_")
 }
-
-// AliasToID reverses SanitizeAlias: converts an alias back to the original ID.
-func AliasToID(alias string) string {
-	s := strings.TrimPrefix(alias, "p_")
-	// UUIDs use hyphens at positions 8, 12, 16, 20 in the 32-char hex string.
-	// Since Railway IDs are UUIDs, reconstruct them.
-	clean := strings.ReplaceAll(s, "_", "")
-	if len(clean) == 32 {
-		return clean[0:8] + "-" + clean[8:12] + "-" + clean[12:16] + "-" + clean[16:20] + "-" + clean[20:]
-	}
-	// Fallback: just replace underscores back to hyphens
-	return strings.ReplaceAll(s, "_", "-")
-}

@@ -48,6 +48,40 @@ func copyLabels(src map[string]string) map[string]string {
 	return dst
 }
 
+// deploymentBaseLabels finds the ServiceTarget matching a deployment ID and
+// returns a base label map. Falls back to just {"deployment_id": id}.
+func deploymentBaseLabels(deploymentID string, targets []ServiceTarget) map[string]string {
+	for _, t := range targets {
+		if t.DeploymentID == deploymentID {
+			return map[string]string{
+				"project_id":       t.ProjectID,
+				"project_name":     t.ProjectName,
+				"service_id":       t.ServiceID,
+				"service_name":     t.ServiceName,
+				"environment_id":   t.EnvironmentID,
+				"environment_name": t.EnvironmentName,
+				"deployment_id":    t.DeploymentID,
+			}
+		}
+	}
+	return map[string]string{"deployment_id": deploymentID}
+}
+
+// environmentServiceLookup builds a map of serviceID → ServiceTarget for all
+// targets in the given environment, also returning the environment name.
+func environmentServiceLookup(envID string, targets []ServiceTarget) (services map[string]ServiceTarget, envName string) {
+	services = make(map[string]ServiceTarget)
+	for _, t := range targets {
+		if t.EnvironmentID == envID {
+			services[t.ServiceID] = t
+			if envName == "" {
+				envName = t.EnvironmentName
+			}
+		}
+	}
+	return
+}
+
 // ResolveMeasurements converts human-friendly measurement names (e.g. "cpu", "memory")
 // to the Railway API enum values. Unknown names are skipped.
 func ResolveMeasurements(names []string) []railway.MetricMeasurement {
