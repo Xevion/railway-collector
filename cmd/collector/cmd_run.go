@@ -223,7 +223,6 @@ func (cmd *RunCmd) Run(c *CLI) error {
 			MetricRetention: cfg.Collect.Backfill.MetricRetention,
 			LogRetention:    cfg.Collect.Backfill.LogRetention,
 			ChunkSize:       cfg.Collect.Backfill.MetricChunkSize,
-			Interval:        cfg.Collect.Backfill.Interval,
 			MaxItemsPerPoll: cfg.Collect.Backfill.MaxItemsPerPoll,
 			LogLimit:        cfg.Collect.Logs.Limit,
 			Logger:          logger,

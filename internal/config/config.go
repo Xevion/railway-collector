@@ -64,7 +64,6 @@ type CreditsConfig struct {
 
 type BackfillCollectConfig struct {
 	Enabled         bool          `koanf:"enabled"`
-	Interval        time.Duration `koanf:"interval"`
 	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
 	MetricRetention time.Duration `koanf:"metric_retention"`
 	LogRetention    time.Duration `koanf:"log_retention"`
@@ -167,7 +166,6 @@ func DefaultConfig() *Config {
 			},
 			Backfill: BackfillCollectConfig{
 				Enabled:         true,
-				Interval:        30 * time.Minute,
 				MetricChunkSize: 10 * 24 * time.Hour,
 				MetricRetention: 90 * 24 * time.Hour,
 				LogRetention:    5 * 24 * time.Hour,

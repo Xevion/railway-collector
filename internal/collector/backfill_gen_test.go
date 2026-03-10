@@ -59,7 +59,7 @@ func TestBackfillGenerator_PollReturnsNilWhenNoTargets(t *testing.T) {
 	assert.Nil(t, items)
 }
 
-func TestBackfillGenerator_PollRespectsInterval(t *testing.T) {
+func TestBackfillGenerator_PollImmediatelyAfterDelivery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -86,7 +86,6 @@ func TestBackfillGenerator_PollRespectsInterval(t *testing.T) {
 		ChunkSize:       6 * time.Hour,
 		SampleRate:      30,
 		AvgWindow:       30,
-		Interval:        30 * time.Second,
 		Logger:          slog.Default(),
 	})
 
@@ -96,7 +95,7 @@ func TestBackfillGenerator_PollRespectsInterval(t *testing.T) {
 	items := gen.Poll(now)
 	assert.NotNil(t, items)
 
-	// Second poll re-emits undelivered items (not nil anymore)
+	// Second poll re-emits undelivered items
 	items2 := gen.Poll(now)
 	assert.NotNil(t, items2)
 	assert.Equal(t, len(items), len(items2), "should re-emit same pending items")
@@ -106,13 +105,10 @@ func TestBackfillGenerator_PollRespectsInterval(t *testing.T) {
 		gen.Deliver(context.Background(), item, nil, assert.AnError)
 	}
 
-	// Immediately after delivery, interval gate blocks new poll
+	// Immediately after delivery, next poll should return new items
+	// (no interval gate — credit allocator handles pacing)
 	items = gen.Poll(now)
-	assert.Nil(t, items)
-
-	// After interval, should return items again
-	items = gen.Poll(now.Add(31 * time.Second))
-	assert.NotNil(t, items)
+	assert.NotNil(t, items, "should poll immediately after delivery without interval delay")
 }
 
 func TestBackfillGenerator_PollEmitsMetricWorkItems(t *testing.T) {

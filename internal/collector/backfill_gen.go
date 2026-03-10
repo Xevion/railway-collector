@@ -26,7 +26,6 @@ type BackfillGeneratorConfig struct {
 	MetricRetention time.Duration // how far back to backfill metrics (e.g. 90 days)
 	LogRetention    time.Duration // how far back to backfill env logs (e.g. 5 days)
 	ChunkSize       time.Duration // time-aligned chunk size (e.g. 6 hours)
-	Interval        time.Duration // minimum time between polls
 	MaxItemsPerPoll int           // max work items to emit per poll
 	LogLimit        int           // max log entries per request
 	Logger          *slog.Logger
@@ -46,12 +45,10 @@ type BackfillGenerator struct {
 	metricRetention time.Duration
 	logRetention    time.Duration
 	chunkSize       time.Duration
-	interval        time.Duration
 	maxItemsPerPoll int
 	logLimit        int
 	logger          *slog.Logger
 
-	nextPoll     time.Time
 	pendingItems []WorkItem      // cached items re-emitted until consumed via Deliver
 	delivered    map[string]bool // tracks which pending items have been delivered
 }
@@ -95,7 +92,6 @@ func NewBackfillGenerator(cfg BackfillGeneratorConfig) *BackfillGenerator {
 		metricRetention: cfg.MetricRetention,
 		logRetention:    cfg.LogRetention,
 		chunkSize:       cfg.ChunkSize,
-		interval:        cfg.Interval,
 		maxItemsPerPoll: cfg.MaxItemsPerPoll,
 		logLimit:        cfg.LogLimit,
 		logger:          cfg.Logger,
@@ -133,10 +129,10 @@ func (g *BackfillGenerator) backfillMetricBatchKey(chunkStart, chunkEnd time.Tim
 // so they can be merged into one aliased request.
 //
 // Items are cached and re-emitted on subsequent ticks until consumed via
-// Deliver. The poll interval only advances once all pending items are delivered,
-// preventing work from being silently dropped when higher-priority batches win.
-// NextPoll returns the earliest time this generator will produce work.
-func (g *BackfillGenerator) NextPoll() time.Time { return g.nextPoll }
+// Deliver, preventing work from being silently dropped when higher-priority
+// batches win. Pacing is handled entirely by the credit allocator.
+// NextPoll always returns zero (ready) since backfill has no interval gate.
+func (g *BackfillGenerator) NextPoll() time.Time { return time.Time{} }
 
 func (g *BackfillGenerator) Poll(now time.Time) []WorkItem {
 	// Re-emit undelivered items from a previous poll.
@@ -150,16 +146,9 @@ func (g *BackfillGenerator) Poll(now time.Time) []WorkItem {
 		if len(remaining) > 0 {
 			return remaining
 		}
-		// All pending items delivered; clear state and advance the poll gate.
+		// All pending items delivered; clear state.
 		g.pendingItems = nil
 		g.delivered = nil
-		if g.interval > 0 {
-			g.nextPoll = now.Add(g.interval)
-		}
-	}
-
-	if now.Before(g.nextPoll) {
-		return nil
 	}
 
 	targets := g.discovery.Targets()
