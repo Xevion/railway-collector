@@ -9,33 +9,34 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
-	"github.com/xevion/railway-collector/internal/state"
 )
 
 type LogsCollector struct {
-	client    *railway.Client
-	discovery *Discovery
+	client    RailwayAPI
+	discovery TargetProvider
 	sinks     []sink.Sink
 	types     map[string]bool
 	limit     int
 	interval  time.Duration
+	clock     clockwork.Clock
 	firstRun  bool
 	logger    *slog.Logger
-	store     *state.Store
+	store     StateStore
 }
 
 func NewLogsCollector(
-	client *railway.Client,
-	discovery *Discovery,
+	client RailwayAPI,
+	discovery TargetProvider,
 	sinks []sink.Sink,
 	types []string,
 	limit int,
 	interval time.Duration,
-	store *state.Store,
+	store StateStore,
+	clock clockwork.Clock,
 	logger *slog.Logger,
 ) *LogsCollector {
 	typeSet := make(map[string]bool, len(types))
@@ -50,6 +51,7 @@ func NewLogsCollector(
 		types:     typeSet,
 		limit:     limit,
 		interval:  interval,
+		clock:     clock,
 		firstRun:  true,
 		store:     store,
 		logger:    logger,
@@ -61,6 +63,8 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 	if len(targets) == 0 {
 		return nil
 	}
+
+	start := time.Now()
 
 	// Skip jitter on the initial collection after startup
 	applyJitter := !lc.firstRun
@@ -112,7 +116,7 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 						select {
 						case <-gCtx.Done():
 							return gCtx.Err()
-						case <-time.After(jitter):
+						case <-lc.clock.After(jitter):
 						}
 					}
 				}
@@ -122,10 +126,10 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
 						lc.logger.Debug("environment log collection cancelled",
-							"environment", eg.environmentID)
+							"environment", eg.environmentName, "environment_id", eg.environmentID)
 					} else {
 						lc.logger.Error("failed to collect environment logs",
-							"environment", eg.environmentID, "error", err)
+							"environment", eg.environmentName, "environment_id", eg.environmentID, "error", err)
 					}
 					return nil
 				}
@@ -158,7 +162,7 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 						select {
 						case <-gCtx.Done():
 							return gCtx.Err()
-						case <-time.After(jitter):
+						case <-lc.clock.After(jitter):
 						}
 					}
 				}
@@ -184,7 +188,7 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 					}
 					logs, err := lc.collectBuildLogs(gCtx, target.DeploymentID, &localLimit, startDateStr, baseLabels)
 					if err != nil {
-						lc.logger.Debug("failed to collect build logs", "deployment", target.DeploymentID, "error", err)
+						lc.logger.Warn("failed to collect build logs", "deployment", target.DeploymentID, "error", err)
 					} else {
 						mu.Lock()
 						allLogs = append(allLogs, logs...)
@@ -201,7 +205,7 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 					}
 					logs, err := lc.collectHttpLogs(gCtx, target.DeploymentID, &localLimit, startDateStr, baseLabels)
 					if err != nil {
-						lc.logger.Debug("failed to collect HTTP logs", "deployment", target.DeploymentID, "error", err)
+						lc.logger.Warn("failed to collect HTTP logs", "deployment", target.DeploymentID, "error", err)
 					} else {
 						mu.Lock()
 						allLogs = append(allLogs, logs...)
@@ -220,13 +224,30 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 		return nil
 	}
 
-	lc.logger.Debug("collected log entries", "count", len(allLogs))
+	var deploymentCount, buildCount, httpCount int
+	for _, entry := range allLogs {
+		switch entry.Labels["log_type"] {
+		case "deployment":
+			deploymentCount++
+		case "build":
+			buildCount++
+		case "http":
+			httpCount++
+		}
+	}
+	lc.logger.Info("collected log entries",
+		"count", len(allLogs),
+		"deployment", deploymentCount,
+		"build", buildCount,
+		"http", httpCount,
+		"duration", time.Since(start),
+	)
 
 	// Use a fresh bounded context for sink writes if the original was cancelled,
 	// so we don't lose data that was already collected.
 	sinkCtx := ctx
 	if ctx.Err() != nil {
-		lc.logger.Info("original context cancelled, flushing collected data with 10s deadline")
+		lc.logger.Info("original context cancelled, flushing collected data with 10s deadline", "entries", len(allLogs))
 		var sinkCancel context.CancelFunc
 		sinkCtx, sinkCancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer sinkCancel()
@@ -235,14 +256,16 @@ func (lc *LogsCollector) Collect(ctx context.Context) error {
 	for _, s := range lc.sinks {
 		if err := s.WriteLogs(sinkCtx, allLogs); err != nil {
 			lc.logger.Error("failed to write logs to sink", "sink", s.Name(), "error", err)
+		} else {
+			lc.logger.Debug("wrote logs to sink", "sink", s.Name(), "entries", len(allLogs))
 		}
 	}
 
 	if ctx.Err() != nil {
 		if sinkCtx.Err() != nil {
-			lc.logger.Warn("sink flush may have been truncated by timeout")
+			lc.logger.Warn("sink flush may have been truncated by timeout", "entries", len(allLogs))
 		} else {
-			lc.logger.Info("sink flush completed successfully during shutdown")
+			lc.logger.Info("sink flush completed successfully during shutdown", "entries", len(allLogs))
 		}
 	}
 
@@ -258,6 +281,12 @@ func (lc *LogsCollector) collectEnvironmentLogs(
 	limit *int,
 	services map[string]ServiceTarget,
 ) ([]sink.LogEntry, error) {
+	environmentName := ""
+	for _, t := range services {
+		environmentName = t.EnvironmentName
+		break
+	}
+
 	startDate := lc.getLastSeen(environmentID, "environment")
 	var afterDateStr *string
 	if !startDate.IsZero() {
@@ -277,6 +306,7 @@ func (lc *LogsCollector) collectEnvironmentLogs(
 		ts, err := time.Parse(time.RFC3339Nano, log.Timestamp)
 		if err != nil {
 			lc.logger.Warn("skipping environment log with unparseable timestamp",
+				"environment", environmentName, "environment_id", environmentID,
 				"timestamp", log.Timestamp, "error", err)
 			continue
 		}
@@ -343,6 +373,30 @@ func (lc *LogsCollector) collectEnvironmentLogs(
 
 	if !maxTS.IsZero() {
 		lc.setLastSeen(environmentID, "environment", maxTS)
+
+		// Record coverage for this environment's logs
+		covStart := startDate
+		if covStart.IsZero() {
+			covStart = maxTS.Add(-time.Hour)
+		}
+		coverageKey := CoverageKey(environmentID, "log", "environment")
+		existing, covErr := LoadCoverage(lc.store, coverageKey)
+		if covErr != nil {
+			lc.logger.Warn("failed to load log coverage", "environment", environmentName, "environment_id", environmentID, "error", covErr)
+		} else {
+			kind := CoverageCollected
+			if len(entries) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start: covStart,
+				End:   maxTS,
+				Kind:  kind,
+			})
+			if covErr := SaveCoverage(lc.store, coverageKey, updated); covErr != nil {
+				lc.logger.Warn("failed to save log coverage", "environment", environmentName, "environment_id", environmentID, "error", covErr)
+			}
+		}
 	}
 
 	return entries, nil
@@ -392,6 +446,35 @@ func (lc *LogsCollector) collectBuildLogs(ctx context.Context, deploymentID stri
 
 	if !maxTS.IsZero() {
 		lc.setLastSeen(deploymentID, "build", maxTS)
+
+		// Record coverage for this deployment's build logs
+		var covStart time.Time
+		if startDate != nil {
+			if parsed, err := time.Parse(time.RFC3339Nano, *startDate); err == nil {
+				covStart = parsed
+			}
+		}
+		if covStart.IsZero() {
+			covStart = maxTS.Add(-time.Hour)
+		}
+		coverageKey := CoverageKey(deploymentID, "log", "build")
+		existing, covErr := LoadCoverage(lc.store, coverageKey)
+		if covErr != nil {
+			lc.logger.Warn("failed to load log coverage", "deployment", deploymentID, "error", covErr)
+		} else {
+			kind := CoverageCollected
+			if len(entries) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start: covStart,
+				End:   maxTS,
+				Kind:  kind,
+			})
+			if covErr := SaveCoverage(lc.store, coverageKey, updated); covErr != nil {
+				lc.logger.Warn("failed to save log coverage", "deployment", deploymentID, "error", covErr)
+			}
+		}
 	}
 
 	return entries, nil
@@ -453,6 +536,35 @@ func (lc *LogsCollector) collectHttpLogs(ctx context.Context, deploymentID strin
 
 	if !maxTS.IsZero() {
 		lc.setLastSeen(deploymentID, "http", maxTS)
+
+		// Record coverage for this deployment's HTTP logs
+		var covStart time.Time
+		if startDate != nil {
+			if parsed, err := time.Parse(time.RFC3339Nano, *startDate); err == nil {
+				covStart = parsed
+			}
+		}
+		if covStart.IsZero() {
+			covStart = maxTS.Add(-time.Hour)
+		}
+		coverageKey := CoverageKey(deploymentID, "log", "http")
+		existing, covErr := LoadCoverage(lc.store, coverageKey)
+		if covErr != nil {
+			lc.logger.Warn("failed to load log coverage", "deployment", deploymentID, "error", covErr)
+		} else {
+			kind := CoverageCollected
+			if len(entries) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start: covStart,
+				End:   maxTS,
+				Kind:  kind,
+			})
+			if covErr := SaveCoverage(lc.store, coverageKey, updated); covErr != nil {
+				lc.logger.Warn("failed to save log coverage", "deployment", deploymentID, "error", covErr)
+			}
+		}
 	}
 
 	return entries, nil

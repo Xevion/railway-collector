@@ -14,17 +14,39 @@ import (
 // LevelTrace is below Debug, for very noisy per-datapoint logs.
 const LevelTrace = slog.LevelDebug - 4
 
-// Formatters returns slog-formatter middleware that auto-formats durations
-// and large integers for human-readable log output.
+// commaThreshold is the minimum absolute value at which integers get
+// comma formatting. Values below this pass through as plain numbers.
+const commaThreshold = 10_000
+
+// Pct wraps a float64 for percentage display in structured logs.
+// Pass it via slog.Any: slog.Any("match_rate", logging.Pct(94.3))
+type Pct float64
+
+func (p Pct) LogValue() slog.Value {
+	v := float64(p)
+	if v == float64(int64(v)) {
+		return slog.StringValue(fmt.Sprintf("%d%%", int64(v)))
+	}
+	return slog.StringValue(fmt.Sprintf("%.1f%%", v))
+}
+
+// Formatters returns slog-formatter middleware that auto-formats durations,
+// large integers, and percentages for human-readable log output.
 func Formatters() []slogformatter.Formatter {
 	return []slogformatter.Formatter{
 		slogformatter.FormatByKind(slog.KindDuration, formatDuration),
 		slogformatter.FormatByKind(slog.KindInt64, formatInt),
+		slogformatter.FormatByType(func(p Pct) slog.Value {
+			return p.LogValue()
+		}),
 	}
 }
 
 func formatDuration(v slog.Value) slog.Value {
 	d := v.Duration()
+	if d < 0 {
+		d = -d
+	}
 	switch {
 	case d < time.Second:
 		return slog.StringValue(fmt.Sprintf("%dms", d.Milliseconds()))
@@ -39,7 +61,7 @@ func formatDuration(v slog.Value) slog.Value {
 
 func formatInt(v slog.Value) slog.Value {
 	n := v.Int64()
-	if n >= 10_000 || n <= -10_000 {
+	if n >= commaThreshold || n <= -commaThreshold {
 		return slog.StringValue(humanize.Comma(n))
 	}
 	return v

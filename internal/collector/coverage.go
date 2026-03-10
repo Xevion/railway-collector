@@ -1,0 +1,172 @@
+package collector
+
+import (
+	"encoding/json"
+	"sort"
+	"strings"
+	"time"
+)
+
+// CoverageKind indicates whether an interval contains collected data or was checked and found empty.
+type CoverageKind int
+
+const (
+	CoverageCollected CoverageKind = iota
+	CoverageEmpty
+)
+
+// CoverageInterval represents a time range that has been collected (or checked).
+type CoverageInterval struct {
+	Start      time.Time    `json:"start"`
+	End        time.Time    `json:"end"`
+	Kind       CoverageKind `json:"kind"`
+	Resolution int          `json:"resolution,omitempty"` // sampleRateSeconds for metrics, 0 for logs/empty
+}
+
+// TimeRange is a simple start/end pair used for gap representation.
+type TimeRange struct {
+	Start time.Time
+	End   time.Time
+}
+
+func (tr TimeRange) Duration() time.Duration {
+	return tr.End.Sub(tr.Start)
+}
+
+// MergeIntervals combines adjacent/overlapping intervals with the same Kind and Resolution.
+func MergeIntervals(intervals []CoverageInterval) []CoverageInterval {
+	if len(intervals) == 0 {
+		return nil
+	}
+
+	sort.Slice(intervals, func(i, j int) bool {
+		return intervals[i].Start.Before(intervals[j].Start)
+	})
+
+	merged := []CoverageInterval{intervals[0]}
+	for _, iv := range intervals[1:] {
+		last := &merged[len(merged)-1]
+		if iv.Kind == last.Kind && iv.Resolution == last.Resolution &&
+			!iv.Start.After(last.End) {
+			if iv.End.After(last.End) {
+				last.End = iv.End
+			}
+		} else {
+			merged = append(merged, iv)
+		}
+	}
+	return merged
+}
+
+// InsertInterval adds a new interval to an existing sorted list and merges.
+func InsertInterval(existing []CoverageInterval, newIv CoverageInterval) []CoverageInterval {
+	all := append(existing, newIv)
+	return MergeIntervals(all)
+}
+
+// FindGaps returns uncovered time ranges within [windowStart, windowEnd].
+func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []TimeRange {
+	if len(intervals) == 0 {
+		return []TimeRange{{Start: windowStart, End: windowEnd}}
+	}
+
+	sorted := make([]CoverageInterval, len(intervals))
+	copy(sorted, intervals)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Start.Before(sorted[j].Start)
+	})
+
+	var gaps []TimeRange
+	cursor := windowStart
+
+	for _, iv := range sorted {
+		if iv.Start.After(cursor) {
+			gapEnd := iv.Start
+			if gapEnd.After(windowEnd) {
+				gapEnd = windowEnd
+			}
+			if cursor.Before(gapEnd) {
+				gaps = append(gaps, TimeRange{Start: cursor, End: gapEnd})
+			}
+		}
+		if iv.End.After(cursor) {
+			cursor = iv.End
+		}
+	}
+
+	if cursor.Before(windowEnd) {
+		gaps = append(gaps, TimeRange{Start: cursor, End: windowEnd})
+	}
+
+	return gaps
+}
+
+// PrioritizeGaps sorts gaps by urgency: older gaps (closer to retention expiry) first,
+// with ties broken by gap size (larger first).
+func PrioritizeGaps(gaps []TimeRange, now time.Time) []TimeRange {
+	const retentionDays = 90
+	retentionWindow := time.Duration(retentionDays) * 24 * time.Hour
+
+	type scored struct {
+		gap   TimeRange
+		score float64
+	}
+
+	scoredGaps := make([]scored, len(gaps))
+	for i, g := range gaps {
+		age := now.Sub(g.End)
+		retentionLeft := retentionWindow - age
+		if retentionLeft <= 0 {
+			retentionLeft = time.Minute // already expired, max urgency
+		}
+		urgency := 1.0 / retentionLeft.Hours()
+		size := g.Duration().Hours()
+		scoredGaps[i] = scored{gap: g, score: urgency * size}
+	}
+
+	sort.Slice(scoredGaps, func(i, j int) bool {
+		return scoredGaps[i].score > scoredGaps[j].score
+	})
+
+	result := make([]TimeRange, len(scoredGaps))
+	for i, s := range scoredGaps {
+		result[i] = s.gap
+	}
+	return result
+}
+
+// CoverageKey builds a composite key for the coverage store.
+// Examples: "proj-1:metric", "env-1:log:environment", "dep-1:log:build"
+func CoverageKey(parts ...string) string {
+	return strings.Join(parts, ":")
+}
+
+// LoadCoverage deserializes coverage intervals from the store for a given key.
+// Returns nil (not error) if the key doesn't exist yet.
+func LoadCoverage(store interface {
+	GetCoverage(key string) ([]byte, error)
+}, key string) ([]CoverageInterval, error) {
+	raw, err := store.GetCoverage(key)
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, nil
+	}
+	var intervals []CoverageInterval
+	if err := json.Unmarshal(raw, &intervals); err != nil {
+		return nil, err
+	}
+	return intervals, nil
+}
+
+// SaveCoverage serializes and persists coverage intervals to the store.
+func SaveCoverage(store interface {
+	SetCoverage(key string, data []byte) error
+}, key string, intervals []CoverageInterval) error {
+	data, err := json.Marshal(intervals)
+	if err != nil {
+		return err
+	}
+	return store.SetCoverage(key, data)
+}

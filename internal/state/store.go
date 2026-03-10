@@ -12,6 +12,7 @@ var (
 	metricCursorBucket   = []byte("metric_cursors")
 	discoveryCacheBucket = []byte("discovery_cache")
 	projectListBucket    = []byte("project_list_cache")
+	coverageBucket       = []byte("coverage")
 )
 
 // Store persists collection cursors across restarts.
@@ -28,7 +29,7 @@ func Open(path string) (*Store, error) {
 
 	// Ensure buckets exist
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{logCursorBucket, metricCursorBucket, discoveryCacheBucket, projectListBucket} {
+		for _, b := range [][]byte{logCursorBucket, metricCursorBucket, discoveryCacheBucket, projectListBucket, coverageBucket} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -157,6 +158,42 @@ func (s *Store) SetProjectListCache(workspaceID string, data []byte) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(projectListBucket).Put([]byte(workspaceID), data)
 	})
+}
+
+// GetCoverage returns the raw JSON coverage data for a key, or nil if not found.
+func (s *Store) GetCoverage(key string) ([]byte, error) {
+	var data []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(coverageBucket).Get([]byte(key))
+		if v != nil {
+			data = make([]byte, len(v))
+			copy(data, v)
+		}
+		return nil
+	})
+	return data, err
+}
+
+// SetCoverage stores raw JSON coverage data for a key.
+func (s *Store) SetCoverage(key string, data []byte) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(coverageBucket).Put([]byte(key), data)
+	})
+}
+
+// ListCoverage returns all coverage entries keyed by their composite key.
+func (s *Store) ListCoverage() (map[string][]byte, error) {
+	result := make(map[string][]byte)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(coverageBucket)
+		return b.ForEach(func(k, v []byte) error {
+			data := make([]byte, len(v))
+			copy(data, v)
+			result[string(k)] = data
+			return nil
+		})
+	})
+	return result, err
 }
 
 // Close closes the underlying database.

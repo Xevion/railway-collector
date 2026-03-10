@@ -1,5 +1,5 @@
 # Binary
-collector
+/collector
 
 # Environment
 .env
@@ -19,6 +19,6 @@ Thumbs.db
 
 # Output
 *.jsonl
-
-# State
+*.jsonl.*
 *.db
+*.db.*

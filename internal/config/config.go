@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 	"time"
 
@@ -37,6 +39,16 @@ type CollectConfig struct {
 	Logs      LogsCollectConfig      `koanf:"logs"`
 	Resources ResourcesCollectConfig `koanf:"resources"`
 	Discovery DiscoveryCollectConfig `koanf:"discovery"`
+	Backfill  BackfillCollectConfig  `koanf:"backfill"`
+}
+
+type BackfillCollectConfig struct {
+	Enabled         bool          `koanf:"enabled"`
+	Interval        time.Duration `koanf:"interval"`
+	MaxChunksPerRun int           `koanf:"max_chunks_per_run"`
+	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
+	MetricRetention time.Duration `koanf:"metric_retention"`
+	LogRetention    time.Duration `koanf:"log_retention"`
 }
 
 type DiscoveryCollectConfig struct {
@@ -135,6 +147,14 @@ func DefaultConfig() *Config {
 				ProjectTTL:     time.Hour,
 				ProjectListTTL: 4 * time.Hour,
 				Jitter:         15 * time.Minute,
+			},
+			Backfill: BackfillCollectConfig{
+				Enabled:         true,
+				Interval:        30 * time.Minute,
+				MaxChunksPerRun: 3,
+				MetricChunkSize: 10 * 24 * time.Hour,
+				MetricRetention: 90 * 24 * time.Hour,
+				LogRetention:    5 * 24 * time.Hour,
 			},
 		},
 		Sinks: SinksConfig{

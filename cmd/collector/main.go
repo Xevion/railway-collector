@@ -2,19 +2,18 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"log/slog"
-	"math"
 	"os"
 	"os/signal"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/jonboulle/clockwork"
 	"github.com/lmittmann/tint"
 	slogformatter "github.com/samber/slog-formatter"
 	"github.com/xevion/railway-collector/internal/collector"
@@ -152,15 +151,6 @@ func calculateBudget(
 	}
 }
 
-// significantChange reports whether two durations differ by more than 10%.
-func significantChange(a, b time.Duration) bool {
-	if a == 0 || b == 0 {
-		return a != b
-	}
-	ratio := float64(a) / float64(b)
-	return math.Abs(ratio-1) > 0.10
-}
-
 func main() {
 	configPath := flag.String("config", "", "path to config YAML file (default: config.yaml in working directory)")
 	flag.Parse()
@@ -246,7 +236,7 @@ func main() {
 	if cfg.Sinks.File.Enabled {
 		fs, err := sink.NewFileSink(cfg.Sinks.File.Path, logger)
 		if err != nil {
-			logger.Error("failed to create file sink", "error", err)
+			logger.Error("failed to create file sink", "path", cfg.Sinks.File.Path, "error", err)
 			os.Exit(1)
 		}
 		sinks = append(sinks, fs)
@@ -258,7 +248,7 @@ func main() {
 			Headers:         cfg.Sinks.OTLP.Headers,
 		}, logger)
 		if err != nil {
-			logger.Error("failed to create OTLP sink", "error", err)
+			logger.Error("failed to create OTLP sink", "metrics_endpoint", cfg.Sinks.OTLP.MetricsEndpoint, "logs_endpoint", cfg.Sinks.OTLP.LogsEndpoint, "error", err)
 			os.Exit(1)
 		}
 		sinks = append(sinks, otlpSink)
@@ -272,7 +262,7 @@ func main() {
 	// Initialize state store
 	store, err := state.Open(cfg.State.Path)
 	if err != nil {
-		logger.Error("failed to open state store", "error", err)
+		logger.Error("failed to open state store", "path", cfg.State.Path, "error", err)
 		os.Exit(1)
 	}
 	logger.Info("state store opened", "path", cfg.State.Path)
@@ -280,17 +270,18 @@ func main() {
 	// Initialize discovery with caching
 	discovery := collector.NewDiscovery(collector.DiscoveryConfig{
 		Client:         client,
+		Store:          store,
+		Clock:          clockwork.NewRealClock(),
 		Filters:        cfg.Filters,
 		Workspaces:     workspaces,
 		WorkspaceTTL:   cfg.Collect.Discovery.WorkspaceTTL,
 		ProjectTTL:     cfg.Collect.Discovery.ProjectTTL,
 		ProjectListTTL: cfg.Collect.Discovery.ProjectListTTL,
 		Jitter:         cfg.Collect.Discovery.Jitter,
-		Store:          store,
 		Logger:         logger,
 	})
 	if err := discovery.Refresh(ctx); err != nil {
-		logger.Error("initial discovery failed", "error", err)
+		logger.Error("initial discovery failed", "workspaces", len(workspaces), "error", err)
 		os.Exit(1)
 	}
 
@@ -309,6 +300,7 @@ func main() {
 			cfg.Collect.Metrics.AveragingWindowSeconds,
 			cfg.Collect.Metrics.Lookback,
 			currentMetricsInterval,
+			clockwork.NewRealClock(),
 			logger,
 		)
 	}
@@ -321,218 +313,113 @@ func main() {
 			cfg.Collect.Logs.Limit,
 			currentLogsInterval,
 			store,
+			clockwork.NewRealClock(),
 			logger,
 		)
 	}
 
-	// Graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Backfill manager
+	var backfill collector.Collector
+	if cfg.Collect.Backfill.Enabled {
+		backfillManager := collector.NewBackfillManager(collector.BackfillConfig{
+			API:              client,
+			Store:            store,
+			Discovery:        discovery,
+			Sinks:            sinks,
+			Clock:            clockwork.NewRealClock(),
+			MetricSampleRate: cfg.Collect.Metrics.SampleRateSeconds,
+			MetricAvgWindow:  cfg.Collect.Metrics.AveragingWindowSeconds,
+			MetricRetention:  cfg.Collect.Backfill.MetricRetention,
+			LogRetention:     cfg.Collect.Backfill.LogRetention,
+			LogLimit:         cfg.Collect.Logs.Limit,
+			MaxChunksPerRun:  cfg.Collect.Backfill.MaxChunksPerRun,
+			MetricChunkSize:  cfg.Collect.Backfill.MetricChunkSize,
+			Logger:           logger,
+		})
+		backfill = backfillManager
+		logger.Info("backfill enabled",
+			"interval", cfg.Collect.Backfill.Interval,
+			"max_chunks_per_run", cfg.Collect.Backfill.MaxChunksPerRun,
+			"metric_retention", cfg.Collect.Backfill.MetricRetention,
+			"log_retention", cfg.Collect.Backfill.LogRetention,
+		)
+	}
 
+	sinkNames := make([]string, len(sinks))
+	for i, s := range sinks {
+		sinkNames[i] = s.Name()
+	}
 	logger.Info("railway collector started",
 		"metrics_enabled", cfg.Collect.Metrics.Enabled,
 		"logs_enabled", cfg.Collect.Logs.Enabled,
 		"targets", len(discovery.Targets()),
+		"metrics_interval", currentMetricsInterval,
+		"logs_interval", currentLogsInterval,
+		"backfill_enabled", cfg.Collect.Backfill.Enabled,
+		"sinks", strings.Join(sinkNames, ","),
 	)
 
-	// Collection loop -- only create tickers for enabled collectors;
-	// nil channels block forever in select, effectively disabling that case.
-	// Ticker references are stored at this scope so discovery can Reset() them.
-	var tickers []*time.Ticker
-	var metricsTicker, logsTicker *time.Ticker
-
-	var metricsCh <-chan time.Time
-	if metricsCollector != nil {
-		metricsTicker = time.NewTicker(currentMetricsInterval)
-		defer metricsTicker.Stop()
-		tickers = append(tickers, metricsTicker)
-		metricsCh = metricsTicker.C
-	}
-	var logsCh <-chan time.Time
-	if logsCollector != nil {
-		logsTicker = time.NewTicker(currentLogsInterval)
-		defer logsTicker.Stop()
-		tickers = append(tickers, logsTicker)
-		logsCh = logsTicker.C
-	}
-	var discoveryCh <-chan time.Time
+	var discoveryInterval time.Duration
 	if cfg.Collect.Resources.Enabled {
-		t := time.NewTicker(cfg.Collect.Resources.Interval)
-		defer t.Stop()
-		tickers = append(tickers, t)
-		discoveryCh = t.C
+		discoveryInterval = cfg.Collect.Resources.Interval
 	}
 
-	var wg sync.WaitGroup
-	discoveryDone := make(chan struct{}, 1)
-
-	// Overlap protection: skip a cycle if the previous one is still running
-	var metricsRunning, logsRunning, discoveryRunning sync.Mutex
-
-	// Collect immediately on start
+	// Avoid the nil-interface gotcha: a nil *MetricsCollector assigned to
+	// a Collector interface produces a non-nil interface value.
+	var metrics collector.Collector
 	if metricsCollector != nil {
-		metricsRunning.Lock()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer metricsRunning.Unlock()
-			if err := metricsCollector.Collect(ctx); err != nil {
-				if errors.Is(err, context.Canceled) {
-					logger.Debug("initial metrics collection cancelled")
-				} else {
-					logger.Error("initial metrics collection failed", "error", err)
-				}
-			}
-		}()
+		metrics = metricsCollector
 	}
+	var logs collector.Collector
 	if logsCollector != nil {
-		logsRunning.Lock()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer logsRunning.Unlock()
-			if err := logsCollector.Collect(ctx); err != nil {
-				if errors.Is(err, context.Canceled) {
-					logger.Debug("initial logs collection cancelled")
-				} else {
-					logger.Error("initial logs collection failed", "error", err)
-				}
-			}
-		}()
+		logs = logsCollector
 	}
 
-	for {
-		select {
-		case <-sigCh:
-			logger.Info("shutting down, waiting for in-flight collections...")
+	scheduler := collector.NewScheduler(collector.SchedulerConfig{
+		Clock:             clockwork.NewRealClock(),
+		API:               client,
+		Discovery:         discovery,
+		Metrics:           metrics,
+		Logs:              logs,
+		Backfill:          backfill,
+		MetricsInterval:   currentMetricsInterval,
+		LogsInterval:      currentLogsInterval,
+		DiscoveryInterval: discoveryInterval,
+		BackfillInterval:  cfg.Collect.Backfill.Interval,
+		Budget: func(targets []collector.ServiceTarget) collector.BudgetResult {
+			b := calculateBudget(targets, len(workspaces), cfg, logger)
+			return collector.BudgetResult{
+				MetricsInterval: b.metricsInterval,
+				LogsInterval:    b.logsInterval,
+			}
+		},
+		Logger: logger,
+	})
 
-			// Phase 1 (soft): stop tickers so no new work is spawned,
-			// then wait up to 5s for in-flight goroutines to finish.
-			for _, t := range tickers {
-				t.Stop()
-			}
+	// Two-phase shutdown driven by signal handler:
+	//   Phase 1: Stop() -- tickers stop, Run drains in-flight work (5s timeout)
+	//   Phase 2: cancel() -- context cancelled, aborts in-flight HTTP requests,
+	//            Run drains again (5s timeout) then returns
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-			drained := make(chan struct{})
-			go func() {
-				wg.Wait()
-				close(drained)
-			}()
+	go func() {
+		<-sigCh
+		logger.Info("shutting down, waiting for in-flight collections...")
+		scheduler.Stop()
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
 
-			select {
-			case <-drained:
-				logger.Debug("all collections drained")
-			case <-time.After(5 * time.Second):
-				// Phase 2 (hard): cancel the context to abort in-flight HTTP
-				// requests, then wait another 5s for goroutines to return.
-				logger.Warn("in-flight collections still running, cancelling context...")
-				cancel()
-				select {
-				case <-drained:
-					logger.Debug("all collections drained after cancel")
-				case <-time.After(5 * time.Second):
-					logger.Warn("timed out waiting for in-flight collections")
-				}
-			}
+	_ = scheduler.Run(ctx)
+	cancel()
 
-			// Ensure context is cancelled before closing sinks, even on clean drain
-			cancel()
-
-			for _, s := range sinks {
-				if err := s.Close(); err != nil {
-					logger.Error("failed to close sink", "sink", s.Name(), "error", err)
-				}
-			}
-			if err := store.Close(); err != nil {
-				logger.Error("failed to close state store", "error", err)
-			}
-			return
-
-		case <-metricsCh:
-			if limited, wait := client.IsRateLimited(); limited {
-				logger.Warn("skipping metrics collection, API rate limited", "wait", wait.Round(time.Second))
-				continue
-			}
-			if !metricsRunning.TryLock() {
-				logger.Warn("skipping metrics collection, previous cycle still running")
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer metricsRunning.Unlock()
-				if err := metricsCollector.Collect(ctx); err != nil {
-					if errors.Is(err, context.Canceled) {
-						logger.Debug("metrics collection cancelled")
-					} else {
-						logger.Error("metrics collection failed", "error", err)
-					}
-				}
-			}()
-
-		case <-logsCh:
-			if limited, wait := client.IsRateLimited(); limited {
-				logger.Warn("skipping logs collection, API rate limited", "wait", wait.Round(time.Second))
-				continue
-			}
-			if !logsRunning.TryLock() {
-				logger.Warn("skipping logs collection, previous cycle still running")
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer logsRunning.Unlock()
-				if err := logsCollector.Collect(ctx); err != nil {
-					if errors.Is(err, context.Canceled) {
-						logger.Debug("logs collection cancelled")
-					} else {
-						logger.Error("logs collection failed", "error", err)
-					}
-				}
-			}()
-
-		case <-discoveryCh:
-			if limited, wait := client.IsRateLimited(); limited {
-				logger.Warn("skipping discovery refresh, API rate limited", "wait", wait.Round(time.Second))
-				continue
-			}
-			if !discoveryRunning.TryLock() {
-				logger.Warn("skipping discovery refresh, previous cycle still running")
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer discoveryRunning.Unlock()
-				if err := discovery.Refresh(ctx); err != nil {
-					if errors.Is(err, context.Canceled) {
-						logger.Debug("discovery refresh cancelled")
-					} else {
-						logger.Error("discovery refresh failed", "error", err)
-					}
-					return
-				}
-				// Signal the main loop to recalculate budget
-				select {
-				case discoveryDone <- struct{}{}:
-				default:
-				}
-			}()
-
-		case <-discoveryDone:
-			newBudget := calculateBudget(discovery.Targets(), len(workspaces), cfg, logger)
-			if metricsTicker != nil && significantChange(currentMetricsInterval, newBudget.metricsInterval) {
-				logger.Info("adjusted metrics interval after discovery",
-					"old", currentMetricsInterval, "new", newBudget.metricsInterval)
-				currentMetricsInterval = newBudget.metricsInterval
-				metricsTicker.Reset(currentMetricsInterval)
-			}
-			if logsTicker != nil && significantChange(currentLogsInterval, newBudget.logsInterval) {
-				logger.Info("adjusted logs interval after discovery",
-					"old", currentLogsInterval, "new", newBudget.logsInterval)
-				currentLogsInterval = newBudget.logsInterval
-				logsTicker.Reset(currentLogsInterval)
-			}
+	for _, s := range sinks {
+		if err := s.Close(); err != nil {
+			logger.Error("failed to close sink", "sink", s.Name(), "error", err)
 		}
+	}
+	if err := store.Close(); err != nil {
+		logger.Error("failed to close state store", "error", err)
 	}
 }

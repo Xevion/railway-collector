@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Khan/genqlient/graphql"
+	"github.com/xevion/railway-collector/internal/logging"
 	"golang.org/x/time/rate"
 )
 
@@ -136,7 +137,11 @@ func (t *rateLimitTransport) trackHeaders(resp *http.Response) {
 			t.remaining = remaining
 			t.initialized = true
 			if remaining < 50 && remaining > 0 {
-				t.logger.Warn("rate limit running low", "remaining", remaining)
+				t.logger.Warn("rate limit running low",
+					"remaining", remaining,
+					"reset_at", t.resetAt.Format(time.RFC3339),
+					"reset_in", time.Until(t.resetAt).Round(time.Second),
+				)
 			}
 		}
 	}
@@ -193,11 +198,12 @@ func (c *Client) wait(ctx context.Context) error {
 			"wait", waitDur.Round(time.Second),
 			"reset_at", resetAt.Format(time.RFC3339))
 
+		waitStart := time.Now()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(waitDur):
-			c.logger.Info("rate limit reset, resuming requests")
+			c.logger.Info("rate limit reset, resuming requests", "waited", time.Since(waitStart).Round(time.Second))
 		}
 	}
 
@@ -220,8 +226,14 @@ func do[T any](c *Client, ctx context.Context, method string, fn func() (T, erro
 			return zero, err
 		}
 
+		callStart := time.Now()
 		result, err := fn()
+		callDuration := time.Since(callStart)
 		if err == nil {
+			c.logger.Log(ctx, logging.LevelTrace, "API request completed",
+				"method", method,
+				"duration", callDuration.Round(time.Millisecond),
+			)
 			return result, nil
 		}
 		lastErr = err

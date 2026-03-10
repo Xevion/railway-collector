@@ -22,6 +22,14 @@ generate:
 tidy:
     go mod tidy
 
+# Run all tests
+test *ARGS:
+    go test ./... {{ARGS}}
+
+# Generate mocks
+mocks:
+    go generate ./internal/collector/...
+
 # Remove build artifacts
 clean:
     rm -f collector

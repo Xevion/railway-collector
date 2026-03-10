@@ -12,10 +12,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/jonboulle/clockwork"
+
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
-	"github.com/xevion/railway-collector/internal/state"
 )
 
 var measurementMap = map[string]railway.MetricMeasurement{
@@ -43,28 +44,30 @@ var prometheusNameMap = map[railway.MetricMeasurement]string{
 }
 
 type MetricsCollector struct {
-	client       *railway.Client
-	discovery    *Discovery
+	client       RailwayAPI
+	discovery    TargetProvider
 	sinks        []sink.Sink
-	store        *state.Store
+	store        StateStore
 	measurements []railway.MetricMeasurement
 	sampleRate   *int
 	avgWindow    *int
 	lookback     time.Duration
 	interval     time.Duration
+	clock        clockwork.Clock
 	firstRun     bool
 	logger       *slog.Logger
 }
 
 func NewMetricsCollector(
-	client *railway.Client,
-	discovery *Discovery,
+	client RailwayAPI,
+	discovery TargetProvider,
 	sinks []sink.Sink,
-	store *state.Store,
+	store StateStore,
 	measurementNames []string,
 	sampleRate, avgWindow int,
 	lookback time.Duration,
 	interval time.Duration,
+	clock clockwork.Clock,
 	logger *slog.Logger,
 ) *MetricsCollector {
 	var measurements []railway.MetricMeasurement
@@ -96,6 +99,7 @@ func NewMetricsCollector(
 		avgWindow:    &avgWindow,
 		lookback:     lookback,
 		interval:     interval,
+		clock:        clock,
 		firstRun:     true,
 		logger:       logger,
 	}
@@ -108,7 +112,8 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 		return nil
 	}
 
-	now := time.Now().UTC()
+	start := time.Now()
+	now := mc.clock.Now().UTC()
 	fallbackStart := now.Add(-mc.lookback)
 
 	groupBy := []railway.MetricTag{
@@ -134,6 +139,14 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 
 	for _, projectID := range projectIDs {
 		g.Go(func() error {
+			projectName := ""
+			for _, t := range targets {
+				if t.ProjectID == projectID {
+					projectName = t.ProjectName
+					break
+				}
+			}
+
 			// Spread API calls across 80% of the interval to avoid thundering herd
 			if applyJitter {
 				maxJitter := time.Duration(float64(mc.interval) * 0.8)
@@ -142,7 +155,7 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 					select {
 					case <-gCtx.Done():
 						return gCtx.Err()
-					case <-time.After(jitter):
+					case <-mc.clock.After(jitter):
 					}
 				}
 			}
@@ -163,19 +176,40 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 			)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					mc.logger.Debug("collection cancelled", "project", projectID)
+					mc.logger.Debug("collection cancelled", "project", projectName, "project_id", projectID)
 				} else {
-					mc.logger.Error("failed to collect metrics", "project", projectID, "error", err)
+					mc.logger.Error("failed to collect metrics", "project", projectName, "project_id", projectID, "error", err)
 				}
 				return nil
 			}
 
 			// Persist the current time as the cursor for next fetch
 			if err := mc.store.SetMetricCursor(projectID, now); err != nil {
-				mc.logger.Error("failed to persist metric cursor", "project", projectID, "error", err)
+				mc.logger.Error("failed to persist metric cursor", "project", projectName, "project_id", projectID, "error", err)
 			}
 
-			mc.logger.Debug("metrics API response", "project", projectID, "results", len(resp.Metrics))
+			// Record coverage interval for this fetch window
+			coverageKey := CoverageKey(projectID, "metric")
+			existing, err := LoadCoverage(mc.store, coverageKey)
+			if err != nil {
+				mc.logger.Warn("failed to load metric coverage", "project", projectName, "project_id", projectID, "error", err)
+			} else {
+				newInterval := CoverageInterval{
+					Start:      startTime,
+					End:        now,
+					Kind:       CoverageCollected,
+					Resolution: *mc.sampleRate,
+				}
+				if len(resp.Metrics) == 0 {
+					newInterval.Kind = CoverageEmpty
+				}
+				updated := InsertInterval(existing, newInterval)
+				if err := SaveCoverage(mc.store, coverageKey, updated); err != nil {
+					mc.logger.Warn("failed to save metric coverage", "project", projectName, "project_id", projectID, "error", err)
+				}
+			}
+
+			mc.logger.Debug("metrics API response", "project", projectName, "project_id", projectID, "results", len(resp.Metrics))
 
 			var points []sink.MetricPoint
 			for _, result := range resp.Metrics {
@@ -196,19 +230,19 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 					continue
 				}
 
-				latest := result.Values[len(result.Values)-1]
-				mc.logger.Log(gCtx, logging.LevelTrace, "metric data point",
+				mc.logger.Log(gCtx, logging.LevelTrace, "metric data points",
 					"metric", metricName,
-					"value", latest.Value,
-					"points_available", len(result.Values),
+					"count", len(result.Values),
 					"service_name", labels["service_name"],
 				)
-				points = append(points, sink.MetricPoint{
-					Name:      metricName,
-					Value:     latest.Value,
-					Timestamp: time.Unix(int64(latest.Ts), 0),
-					Labels:    labels,
-				})
+				for _, v := range result.Values {
+					points = append(points, sink.MetricPoint{
+						Name:      metricName,
+						Value:     v.Value,
+						Timestamp: time.Unix(int64(v.Ts), 0),
+						Labels:    labels,
+					})
+				}
 			}
 
 			mu.Lock()
@@ -221,13 +255,13 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 
 	_ = g.Wait()
 
-	mc.logger.Debug("collected metric points", "count", len(allPoints))
+	mc.logger.Info("collected metric points", "count", len(allPoints), "projects", len(projectIDs), "duration", time.Since(start))
 
 	// Use a fresh bounded context for sink writes if the original was cancelled,
 	// so we don't lose data that was already collected.
 	sinkCtx := ctx
 	if ctx.Err() != nil {
-		mc.logger.Info("original context cancelled, flushing collected data with 10s deadline")
+		mc.logger.Info("original context cancelled, flushing collected data with 10s deadline", "points", len(allPoints))
 		var sinkCancel context.CancelFunc
 		sinkCtx, sinkCancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer sinkCancel()
@@ -236,14 +270,16 @@ func (mc *MetricsCollector) Collect(ctx context.Context) error {
 	for _, s := range mc.sinks {
 		if err := s.WriteMetrics(sinkCtx, allPoints); err != nil {
 			mc.logger.Error("failed to write metrics to sink", "sink", s.Name(), "error", err)
+		} else {
+			mc.logger.Debug("wrote metrics to sink", "sink", s.Name(), "points", len(allPoints))
 		}
 	}
 
 	if ctx.Err() != nil {
 		if sinkCtx.Err() != nil {
-			mc.logger.Warn("sink flush may have been truncated by timeout")
+			mc.logger.Warn("sink flush may have been truncated by timeout", "points", len(allPoints))
 		} else {
-			mc.logger.Info("sink flush completed successfully during shutdown")
+			mc.logger.Info("sink flush completed successfully during shutdown", "points", len(allPoints))
 		}
 	}
 
