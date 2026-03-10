@@ -67,26 +67,30 @@ const httpLogsFieldBody = `{
 // environmentLogsFieldBody is the selection set for environment logs.
 const environmentLogsFieldBody = deploymentLogsFieldBody
 
+// MetricsBatchItem represents a single project's parameters within a batch
+// metrics query. Each project can have its own startDate (cursor position)
+// and optional endDate (for backfill bounded queries).
+type MetricsBatchItem struct {
+	ProjectID string
+	StartDate string
+	EndDate   *string
+}
+
 // BuildBatchMetricsQuery constructs a GraphQL query that fetches metrics for
 // multiple projects in a single request using aliases.
 //
-// Each projectID gets its own aliased `metrics(...)` call with shared parameters
-// passed as variables. Returns the query string and variables map.
+// Each project gets its own aliased `metrics(...)` call with per-project
+// startDate/endDate variables and shared measurement/groupBy/sampling
+// parameters. Returns the query string and variables map.
 func BuildBatchMetricsQuery(
-	projectIDs []string,
+	items []MetricsBatchItem,
 	measurements []MetricMeasurement,
 	groupBy []MetricTag,
-	startDate string,
-	endDate *string,
 	sampleRateSeconds *int,
 	averagingWindowSeconds *int,
 ) (query string, variables map[string]any) {
 	variables = map[string]any{
-		"startDate":    startDate,
 		"measurements": measurements,
-	}
-	if endDate != nil {
-		variables["endDate"] = *endDate
 	}
 	if len(groupBy) > 0 {
 		variables["groupBy"] = groupBy
@@ -99,11 +103,7 @@ func BuildBatchMetricsQuery(
 	}
 
 	var varDecls []string
-	varDecls = append(varDecls, "$startDate: DateTime!")
 	varDecls = append(varDecls, "$measurements: [MetricMeasurement!]!")
-	if endDate != nil {
-		varDecls = append(varDecls, "$endDate: DateTime")
-	}
 	if len(groupBy) > 0 {
 		varDecls = append(varDecls, "$groupBy: [MetricTag!]")
 	}
@@ -115,15 +115,27 @@ func BuildBatchMetricsQuery(
 	}
 
 	var aliases []string
-	for _, pid := range projectIDs {
-		alias := SanitizeAlias(pid)
+	for _, item := range items {
+		alias := SanitizeAlias(item.ProjectID)
+
+		// Per-alias startDate variable
+		startVar := "startDate_" + alias
+		varDecls = append(varDecls, fmt.Sprintf("$%s: DateTime!", startVar))
+		variables[startVar] = item.StartDate
+
 		args := fmt.Sprintf(
-			`projectId: %q, startDate: $startDate, measurements: $measurements`,
-			pid,
+			`projectId: %q, startDate: $%s, measurements: $measurements`,
+			item.ProjectID, startVar,
 		)
-		if endDate != nil {
-			args += ", endDate: $endDate"
+
+		// Per-alias endDate variable (backfill queries set this)
+		if item.EndDate != nil {
+			endVar := "endDate_" + alias
+			varDecls = append(varDecls, fmt.Sprintf("$%s: DateTime", endVar))
+			variables[endVar] = *item.EndDate
+			args += fmt.Sprintf(", endDate: $%s", endVar)
 		}
+
 		if len(groupBy) > 0 {
 			args += ", groupBy: $groupBy"
 		}

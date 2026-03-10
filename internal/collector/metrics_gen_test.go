@@ -246,7 +246,7 @@ func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	assert.Equal(t, "env-1", collected[0].Labels["environment_id"])
 	assert.Equal(t, "test-service", collected[0].Labels["service_name"])
 	assert.Equal(t, "test-project", collected[0].Labels["project_name"])
-	assert.Equal(t, "false", collected[0].Labels["backfill"])
+	assert.NotContains(t, collected[0].Labels, "backfill")
 }
 
 func TestMetricsGenerator_Deliver_HandlesError(t *testing.T) {

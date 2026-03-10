@@ -354,7 +354,7 @@ func TestBackfillGenerator_DeliverMetrics(t *testing.T) {
 	require.Len(t, collectedPoints, 2)
 	assert.Equal(t, "railway_cpu_usage_cores", collectedPoints[0].Name)
 	assert.Equal(t, 0.42, collectedPoints[0].Value)
-	assert.Equal(t, "true", collectedPoints[0].Labels["backfill"])
+	assert.NotContains(t, collectedPoints[0].Labels, "backfill")
 }
 
 func TestBackfillGenerator_DeliverEnvLogs(t *testing.T) {
@@ -430,7 +430,7 @@ func TestBackfillGenerator_DeliverEnvLogs(t *testing.T) {
 
 	require.Len(t, collectedLogs, 1)
 	assert.Equal(t, "test log message", collectedLogs[0].Message)
-	assert.Equal(t, "true", collectedLogs[0].Labels["backfill"])
+	assert.NotContains(t, collectedLogs[0].Labels, "backfill")
 }
 
 func TestBackfillGenerator_DeliverError(t *testing.T) {
@@ -512,7 +512,7 @@ func TestBackfillGenerator_PollEmitsEnvLogItems(t *testing.T) {
 			hasEnvLogs = true
 			assert.Equal(t, collector.TaskTypeBackfill, item.TaskType)
 			assert.Equal(t, "env-1", item.AliasKey)
-			assert.Equal(t, "true", item.Params["backfill"])
+			assert.NotContains(t, item.Params, "backfill")
 		}
 	}
 	assert.True(t, hasEnvLogs, "should have env log backfill items")

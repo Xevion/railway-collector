@@ -95,8 +95,11 @@ func TestBuildQueryFromBatch_Metrics(t *testing.T) {
 	assert.Contains(t, query, "p_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee: metrics(")
 	assert.Contains(t, query, "p_11111111_2222_3333_4444_555555555555: metrics(")
 
-	// Should use earliest start date
-	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate"])
+	// Each project should have its own startDate variable
+	alias1 := railway.SanitizeAlias("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	alias2 := railway.SanitizeAlias("11111111-2222-3333-4444-555555555555")
+	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate_"+alias1])
+	assert.Equal(t, "2025-01-02T00:00:00Z", vars["startDate_"+alias2])
 }
 
 func TestBuildQueryFromBatch_MetricsWithEndDate(t *testing.T) {
@@ -132,8 +135,9 @@ func TestBuildQueryFromBatch_MetricsWithEndDate(t *testing.T) {
 	_, _, vars, err := collector.BuildQueryFromBatch(batch)
 	require.NoError(t, err)
 
-	// Should pass through endDate
-	assert.Equal(t, "2025-01-01T06:00:00Z", vars["endDate"])
+	// Each project should have its own endDate variable
+	assert.Equal(t, "2025-01-01T06:00:00Z", vars["endDate_"+railway.SanitizeAlias("proj-a")])
+	assert.Equal(t, "2025-01-01T06:00:00Z", vars["endDate_"+railway.SanitizeAlias("proj-b")])
 }
 
 func TestBuildQueryFromBatch_MetricsWithoutEndDate(t *testing.T) {
@@ -157,8 +161,8 @@ func TestBuildQueryFromBatch_MetricsWithoutEndDate(t *testing.T) {
 	_, _, vars, err := collector.BuildQueryFromBatch(batch)
 	require.NoError(t, err)
 
-	// Realtime items don't set endDate -- should not appear in vars
-	_, hasEndDate := vars["endDate"]
+	// Realtime items don't set endDate -- per-alias endDate vars should not exist
+	_, hasEndDate := vars["endDate_"+railway.SanitizeAlias("proj-a")]
 	assert.False(t, hasEndDate, "realtime items should not have endDate in vars")
 }
 

@@ -111,32 +111,18 @@ func buildMetricsBatch(opName string, batch Batch) (string, string, map[string]a
 	sampleRate, _ := first["sampleRateSeconds"].(int)
 	avgWindow, _ := first["averagingWindowSeconds"].(int)
 
-	// Use the earliest startDate across all items (projects may have different cursors).
-	var earliestStart string
+	// Build per-project items with their own startDate/endDate.
+	var batchItems []railway.MetricsBatchItem
 	for _, item := range batch.Items {
 		sd, _ := item.Params["startDate"].(string)
-		if sd == "" {
-			continue
+		bi := railway.MetricsBatchItem{
+			ProjectID: item.AliasKey,
+			StartDate: sd,
 		}
-		if earliestStart == "" || sd < earliestStart {
-			earliestStart = sd
-		}
-	}
-
-	// Use the latest endDate across all items (backfill items set this;
-	// realtime items omit it, leaving the query open-ended to "now").
-	var latestEnd *string
-	for _, item := range batch.Items {
 		if ed, ok := item.Params["endDate"].(string); ok {
-			if latestEnd == nil || ed > *latestEnd {
-				latestEnd = &ed
-			}
+			bi.EndDate = &ed
 		}
-	}
-
-	var projectIDs []string
-	for _, item := range batch.Items {
-		projectIDs = append(projectIDs, item.AliasKey)
+		batchItems = append(batchItems, bi)
 	}
 
 	var sampleRatePtr *int
@@ -149,8 +135,8 @@ func buildMetricsBatch(opName string, batch Batch) (string, string, map[string]a
 	}
 
 	query, vars := railway.BuildBatchMetricsQuery(
-		projectIDs, measurements, groupBy,
-		earliestStart, latestEnd, sampleRatePtr, avgWindowPtr,
+		batchItems, measurements, groupBy,
+		sampleRatePtr, avgWindowPtr,
 	)
 	return opName, query, vars, nil
 }

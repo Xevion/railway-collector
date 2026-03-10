@@ -12,11 +12,12 @@ import (
 func TestBuildBatchMetricsQuery(t *testing.T) {
 	sampleRate := 30
 	query, vars := railway.BuildBatchMetricsQuery(
-		[]string{"abc-123", "def-456"},
+		[]railway.MetricsBatchItem{
+			{ProjectID: "abc-123", StartDate: "2024-01-01T00:00:00Z"},
+			{ProjectID: "def-456", StartDate: "2024-01-01T00:05:00Z"},
+		},
 		[]railway.MetricMeasurement{railway.MetricMeasurementCpuUsage, railway.MetricMeasurementMemoryUsageGb},
 		[]railway.MetricTag{railway.MetricTagServiceId},
-		"2024-01-01T00:00:00Z",
-		nil,
 		&sampleRate,
 		nil,
 	)
@@ -33,18 +34,23 @@ func TestBuildBatchMetricsQuery(t *testing.T) {
 	assert.Contains(t, query, "tags {")
 	assert.Contains(t, query, "values {")
 
-	// Variables should be set
-	assert.Equal(t, "2024-01-01T00:00:00Z", vars["startDate"])
+	// Per-alias startDate variables should be set
+	assert.Equal(t, "2024-01-01T00:00:00Z", vars["startDate_p_abc_123"])
+	assert.Equal(t, "2024-01-01T00:05:00Z", vars["startDate_p_def_456"])
 	assert.Equal(t, 30, vars["sampleRateSeconds"])
 	require.Len(t, vars["measurements"], 2)
+
+	// Each alias should reference its own startDate variable
+	assert.Contains(t, query, "startDate: $startDate_p_abc_123")
+	assert.Contains(t, query, "startDate: $startDate_p_def_456")
 }
 
 func TestBuildBatchMetricsQuery_SingleProject(t *testing.T) {
 	query, _ := railway.BuildBatchMetricsQuery(
-		[]string{"single-id"},
+		[]railway.MetricsBatchItem{
+			{ProjectID: "single-id", StartDate: "2024-01-01T00:00:00Z"},
+		},
 		[]railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		nil,
-		"2024-01-01T00:00:00Z",
 		nil,
 		nil,
 		nil,
@@ -53,6 +59,27 @@ func TestBuildBatchMetricsQuery_SingleProject(t *testing.T) {
 	assert.Contains(t, query, "p_single_id: metrics(")
 	// Should not contain groupBy since it's nil
 	assert.NotContains(t, query, "groupBy")
+}
+
+func TestBuildBatchMetricsQuery_PerAliasEndDate(t *testing.T) {
+	end1 := "2024-01-01T06:00:00Z"
+	end2 := "2024-01-01T12:00:00Z"
+	query, vars := railway.BuildBatchMetricsQuery(
+		[]railway.MetricsBatchItem{
+			{ProjectID: "proj-1", StartDate: "2024-01-01T00:00:00Z", EndDate: &end1},
+			{ProjectID: "proj-2", StartDate: "2024-01-01T06:00:00Z", EndDate: &end2},
+		},
+		[]railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		nil,
+		nil,
+		nil,
+	)
+
+	// Each alias should have its own endDate variable
+	assert.Contains(t, query, "endDate: $endDate_p_proj_1")
+	assert.Contains(t, query, "endDate: $endDate_p_proj_2")
+	assert.Equal(t, "2024-01-01T06:00:00Z", vars["endDate_p_proj_1"])
+	assert.Equal(t, "2024-01-01T12:00:00Z", vars["endDate_p_proj_2"])
 }
 
 func TestBuildBatchDeploymentLogsQuery(t *testing.T) {

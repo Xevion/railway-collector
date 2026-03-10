@@ -182,6 +182,7 @@ func (g *BackfillGenerator) pollMetricGaps(now time.Time, targets []ServiceTarge
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
 		railway.MetricTagEnvironmentId,
+		railway.MetricTagDeploymentId,
 	}
 
 	var items []WorkItem
@@ -295,7 +296,6 @@ func (g *BackfillGenerator) pollEnvLogGaps(now time.Time, targets []ServiceTarge
 						"afterDate":  chunk.Start.Format(time.RFC3339Nano),
 						"beforeDate": chunk.End.Format(time.RFC3339Nano),
 						"afterLimit": g.logLimit,
-						"backfill":   "true",
 					},
 				})
 			}
@@ -460,7 +460,6 @@ func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, d
 		labels := map[string]string{
 			"log_type":       "deployment",
 			"environment_id": envID,
-			"backfill":       "true",
 		}
 
 		if log.Tags != nil && log.Tags.ServiceID != nil {
@@ -535,8 +534,8 @@ func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, d
 	}
 }
 
-// buildBackfillLabelsFromRaw builds metric labels from raw JSON tags
-// with backfill=true, enriching with target names.
+// buildBackfillLabelsFromRaw builds metric labels from raw JSON tags,
+// enriching with target names.
 func (g *BackfillGenerator) buildBackfillLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	return buildMetricLabels(tags, targets, true, false)
+	return buildMetricLabels(tags, targets)
 }

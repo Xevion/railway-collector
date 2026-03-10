@@ -32,13 +32,9 @@ type rawMetricsTags struct {
 }
 
 // buildMetricLabels builds metric labels from raw JSON tags, enriching with
-// target names where possible. includeDeploymentID controls whether the
-// deployment_id tag is copied (live metrics include it, backfill does not).
-func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget, backfill, includeDeploymentID bool) map[string]string {
-	labels := map[string]string{"backfill": "false"}
-	if backfill {
-		labels["backfill"] = "true"
-	}
+// target names where possible.
+func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
+	labels := make(map[string]string)
 
 	if tags.ProjectID != nil {
 		labels["project_id"] = *tags.ProjectID
@@ -49,7 +45,7 @@ func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget, backfill, i
 	if tags.EnvironmentID != nil {
 		labels["environment_id"] = *tags.EnvironmentID
 	}
-	if includeDeploymentID && tags.DeploymentID != nil {
+	if tags.DeploymentID != nil {
 		labels["deployment_id"] = *tags.DeploymentID
 	}
 	if tags.Region != nil {
@@ -169,6 +165,7 @@ func (g *MetricsGenerator) Poll(now time.Time) []WorkItem {
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
 		railway.MetricTagEnvironmentId,
+		railway.MetricTagDeploymentId,
 	}
 
 	var items []WorkItem
@@ -295,7 +292,7 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 // buildLabelsFromRaw builds metric labels from raw JSON tags,
 // enriching with target names where possible.
 func (g *MetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	return buildMetricLabels(tags, targets, false, true)
+	return buildMetricLabels(tags, targets)
 }
 
 // rawMeasurementToPrometheusName converts a raw measurement string
