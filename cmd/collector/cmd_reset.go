@@ -1,0 +1,46 @@
+package main
+
+import (
+	"fmt"
+)
+
+// ResetCmd deletes state entries. Requires exclusive DB access.
+type ResetCmd struct {
+	Bucket string `help:"Bucket to clear: metric_cursors, log_cursors, discovery_cache, project_list_cache, coverage." required:""`
+	Key    string `help:"Delete a single key instead of the entire bucket."`
+}
+
+var validBuckets = map[string]bool{
+	"metric_cursors":     true,
+	"log_cursors":        true,
+	"discovery_cache":    true,
+	"project_list_cache": true,
+	"coverage":           true,
+}
+
+func (cmd *ResetCmd) Run(c *CLI) error {
+	if !validBuckets[cmd.Bucket] {
+		return fmt.Errorf("unknown bucket %q; valid: metric_cursors, log_cursors, discovery_cache, project_list_cache, coverage", cmd.Bucket)
+	}
+
+	reader, err := openWriter(c.State, c.Config)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	if cmd.Key != "" {
+		if err := reader.DeleteKey(cmd.Bucket, cmd.Key); err != nil {
+			return err
+		}
+		fmt.Printf("Deleted key %q from %s.\n", cmd.Key, cmd.Bucket)
+		return nil
+	}
+
+	count, err := reader.DeleteBucket(cmd.Bucket)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Deleted %d entries from %s.\n", count, cmd.Bucket)
+	return nil
+}

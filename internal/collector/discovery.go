@@ -69,34 +69,37 @@ type projectCache struct {
 	expiresAt time.Time
 }
 
-// persistedProjectCache is the JSON-serialized form of a per-project discovery cache entry.
-type persistedProjectCache struct {
+// PersistedProjectCache is the JSON-serialized form of a per-project discovery cache entry.
+// PersistedProjectCache is the JSON-serialized form of a project's discovery cache entry.
+type PersistedProjectCache struct {
 	Targets   []ServiceTarget `json:"targets"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
-// cachedProject is a simplified representation of a project from the GetProjects response,
+// CachedProject is a simplified representation of a project from the GetProjects response,
 // suitable for JSON serialization and used as the common type for the discovery loop.
-type cachedProject struct {
+type CachedProject struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
-	Environments []cachedEnvEdge `json:"environments"`
-	Services     []cachedSvcEdge `json:"services"`
+	Environments []CachedEnvEdge `json:"environments"`
+	Services     []CachedSvcEdge `json:"services"`
 }
 
-type cachedEnvEdge struct {
+// CachedEnvEdge is a cached environment reference within a project.
+type CachedEnvEdge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-type cachedSvcEdge struct {
+// CachedSvcEdge is a cached service reference within a project.
+type CachedSvcEdge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// persistedProjectList is the JSON-serialized form of a workspace's project list cache.
-type persistedProjectList struct {
-	Projects  []cachedProject `json:"projects"`
+// PersistedProjectList is the JSON-serialized form of a workspace's project list cache.
+type PersistedProjectList struct {
+	Projects  []CachedProject `json:"projects"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
@@ -133,7 +136,7 @@ type Discovery struct {
 
 	// Project list cache: per-workspace, refreshed at projectListTTL ± jitter
 	projListMu    sync.Mutex
-	projListCache map[string]*cachedEntry[[]cachedProject] // keyed by workspaceID
+	projListCache map[string]*cachedEntry[[]CachedProject] // keyed by workspaceID
 }
 
 func compileFilters(patterns []string, logger *slog.Logger) []compiledFilter {
@@ -198,7 +201,7 @@ func NewDiscovery(cfg DiscoveryConfig) *Discovery {
 		projectListTTL:       plTTL,
 		jitter:               jitter,
 		projCache:            make(map[string]*projectCache),
-		projListCache:        make(map[string]*cachedEntry[[]cachedProject]),
+		projListCache:        make(map[string]*cachedEntry[[]CachedProject]),
 	}
 
 	if len(cfg.Workspaces) > 0 {
@@ -286,7 +289,7 @@ func (d *Discovery) Refresh(ctx context.Context) error {
 
 // resolveProjectList returns the project list for a workspace, using in-memory cache,
 // bbolt persistent cache, or the API (in that priority order).
-func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]cachedProject, error) {
+func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]CachedProject, error) {
 	d.projListMu.Lock()
 	defer d.projListMu.Unlock()
 
@@ -303,14 +306,14 @@ func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]cac
 		if err != nil {
 			d.logger.Warn("failed to read project list cache from store", "workspace", ws.Name, "workspace_id", ws.ID, "error", err)
 		} else if raw != nil {
-			var persisted persistedProjectList
+			var persisted PersistedProjectList
 			if err := json.Unmarshal(raw, &persisted); err != nil {
 				d.logger.Warn("failed to unmarshal project list cache", "workspace", ws.Name, "workspace_id", ws.ID, "error", err)
 			} else if d.clock.Now().Before(persisted.ExpiresAt) {
 				d.logger.Debug("loaded project list from persistent cache", "workspace", ws.Name,
 					"projects", len(persisted.Projects), "ttl", time.Until(persisted.ExpiresAt).Round(time.Second))
 				// Populate in-memory cache
-				d.projListCache[ws.ID] = &cachedEntry[[]cachedProject]{
+				d.projListCache[ws.ID] = &cachedEntry[[]CachedProject]{
 					data:      persisted.Projects,
 					expiresAt: persisted.ExpiresAt,
 				}
@@ -335,19 +338,19 @@ func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]cac
 		d.logger.Warn("project list hit page limit for workspace; some projects may be missing", "workspace", ws.Name, "count", n)
 	}
 
-	// Convert API response to cachedProject slice
-	projects := make([]cachedProject, 0, len(resp.Projects.Edges))
+	// Convert API response to CachedProject slice
+	projects := make([]CachedProject, 0, len(resp.Projects.Edges))
 	for _, pe := range resp.Projects.Edges {
 		p := pe.Node
-		envs := make([]cachedEnvEdge, 0, len(p.Environments.Edges))
+		envs := make([]CachedEnvEdge, 0, len(p.Environments.Edges))
 		for _, ee := range p.Environments.Edges {
-			envs = append(envs, cachedEnvEdge{ID: ee.Node.Id, Name: ee.Node.Name})
+			envs = append(envs, CachedEnvEdge{ID: ee.Node.Id, Name: ee.Node.Name})
 		}
-		svcs := make([]cachedSvcEdge, 0, len(p.Services.Edges))
+		svcs := make([]CachedSvcEdge, 0, len(p.Services.Edges))
 		for _, se := range p.Services.Edges {
-			svcs = append(svcs, cachedSvcEdge{ID: se.Node.Id, Name: se.Node.Name})
+			svcs = append(svcs, CachedSvcEdge{ID: se.Node.Id, Name: se.Node.Name})
 		}
-		projects = append(projects, cachedProject{
+		projects = append(projects, CachedProject{
 			ID:           p.Id,
 			Name:         p.Name,
 			Environments: envs,
@@ -358,7 +361,7 @@ func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]cac
 	// Cache with jittered TTL
 	ttl := jitteredTTL(d.projectListTTL, d.jitter)
 	expiresAt := d.clock.Now().Add(ttl)
-	d.projListCache[ws.ID] = &cachedEntry[[]cachedProject]{
+	d.projListCache[ws.ID] = &cachedEntry[[]CachedProject]{
 		data:      projects,
 		expiresAt: expiresAt,
 	}
@@ -366,7 +369,7 @@ func (d *Discovery) resolveProjectList(ctx context.Context, ws Workspace) ([]cac
 
 	// Persist to bbolt
 	if d.store != nil {
-		persisted := persistedProjectList{
+		persisted := PersistedProjectList{
 			Projects:  projects,
 			ExpiresAt: expiresAt,
 		}
@@ -423,7 +426,7 @@ func (d *Discovery) resolveWorkspaces(ctx context.Context) ([]Workspace, error) 
 
 // discoverCachedProject returns targets for a single project, using in-memory cache,
 // bbolt persistent cache, or API discovery (in that priority order).
-func (d *Discovery) discoverCachedProject(ctx context.Context, p cachedProject, ws Workspace) []ServiceTarget {
+func (d *Discovery) discoverCachedProject(ctx context.Context, p CachedProject, ws Workspace) []ServiceTarget {
 	d.projMu.Lock()
 	if cached, ok := d.projCache[p.ID]; ok && d.clock.Now().Before(cached.expiresAt) {
 		targets := cached.targets
@@ -441,7 +444,7 @@ func (d *Discovery) discoverCachedProject(ctx context.Context, p cachedProject, 
 		if err != nil {
 			d.logger.Warn("failed to read discovery cache from store", "project", p.Name, "project_id", p.ID, "error", err)
 		} else if raw != nil {
-			var persisted persistedProjectCache
+			var persisted PersistedProjectCache
 			if err := json.Unmarshal(raw, &persisted); err != nil {
 				d.logger.Warn("failed to unmarshal discovery cache", "project", p.Name, "project_id", p.ID, "error", err)
 			} else if d.clock.Now().Before(persisted.ExpiresAt) {
@@ -523,7 +526,7 @@ func (d *Discovery) discoverCachedProject(ctx context.Context, p cachedProject, 
 
 	// Persist to bbolt
 	if d.store != nil {
-		persisted := persistedProjectCache{
+		persisted := PersistedProjectCache{
 			Targets:   targets,
 			ExpiresAt: expiresAt,
 		}
