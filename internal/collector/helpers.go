@@ -196,6 +196,149 @@ func copyLabels(src map[string]string) map[string]string {
 	return dst
 }
 
+// pollEntity represents a single entity (project or service+environment) to
+// scan for coverage gaps during a Poll cycle.
+type pollEntity struct {
+	Key          string // entity key for coverage lookup (projectID or compositeKey)
+	CoverageType string // coverage type suffix (CoverageTypeMetric, etc.)
+	LogAttrs     []any  // structured log key-value pairs for debug messages
+	Data         any    // generator-specific data (e.g. ServiceTarget) to avoid re-querying discovery
+}
+
+// gapPollParams configures the shared gap-polling loop used by all metrics
+// generators. The varying behavior is captured by the entities and buildItems
+// callbacks.
+type gapPollParams struct {
+	store           StateStore
+	discovery       TargetProvider
+	logger          *slog.Logger
+	metricRetention time.Duration
+	chunkSize       time.Duration
+	maxItemsPerPoll int
+	nextPoll        time.Time // guard: skip if now < nextPoll
+
+	// entities extracts the iteration list from discovered targets.
+	entities func(targets []ServiceTarget) []pollEntity
+
+	// buildItems constructs WorkItem(s) for a gap/chunk. Returns 1 item for
+	// most generators, 2 for HTTP (duration + status pair). isLiveEdge tells
+	// the callback whether to omit endDate or use a live batchKey.
+	buildItems func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem
+
+	// itemsPerEmit is the budget cost per buildItems call (1 for most, 2 for HTTP).
+	itemsPerEmit int
+
+	// logPrefix labels debug messages (e.g. "metric", "service metric").
+	logPrefix string
+}
+
+// pollCoverageGaps implements the shared gap-walking loop used by all metrics
+// generators' Poll methods. It iterates entities, loads coverage, finds gaps,
+// prioritizes them, splits oversized live-edge gaps into chunks, and emits
+// WorkItems via the buildItems callback.
+func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
+	if now.Before(p.nextPoll) {
+		return nil
+	}
+
+	targets := p.discovery.Targets()
+	if len(targets) == 0 {
+		return nil
+	}
+
+	entities := p.entities(targets)
+	if len(entities) == 0 {
+		return nil
+	}
+
+	retentionStart := now.Add(-p.metricRetention)
+
+	var items []WorkItem
+	itemCount := 0
+
+	for _, entity := range entities {
+		if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
+			break
+		}
+
+		coverageKey := CoverageKey(entity.Key, entity.CoverageType)
+		existing, err := LoadCoverage(p.store, coverageKey)
+		if err != nil {
+			args := append([]any{"error", err}, entity.LogAttrs...)
+			p.logger.Warn("failed to load "+p.logPrefix+" coverage", args...)
+			continue
+		}
+
+		gaps := FindGaps(existing, retentionStart, now)
+		if len(gaps) == 0 {
+			continue
+		}
+
+		var totalGapDuration time.Duration
+		for _, gap := range gaps {
+			totalGapDuration += gap.End.Sub(gap.Start)
+		}
+		args := append([]any{
+			"gaps", len(gaps),
+			"total_gap_duration", totalGapDuration,
+			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+		}, entity.LogAttrs...)
+		p.logger.Debug(p.logPrefix+" coverage gaps found", args...)
+
+		prioritized := PrioritizeGaps(gaps, now)
+
+		for _, gap := range prioritized {
+			if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
+				break
+			}
+
+			isLiveEdge := now.Sub(gap.End) < time.Minute
+
+			if isLiveEdge {
+				// If the gap is larger than one chunk, split the older
+				// portion into fixed chunks and only keep the tail as
+				// the live-edge query.
+				gapDuration := gap.End.Sub(gap.Start)
+				if gapDuration > p.chunkSize {
+					olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-p.chunkSize)}
+					chunks := alignedChunks(olderGap, p.chunkSize)
+					for _, chunk := range chunks {
+						if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
+							break
+						}
+						built := p.buildItems(entity, chunk, false)
+						items = append(items, built...)
+						itemCount += p.itemsPerEmit
+					}
+					// Adjust the live-edge start to the tail
+					gap = TimeRange{Start: gap.End.Add(-p.chunkSize), End: gap.End}
+				}
+
+				if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
+					break
+				}
+
+				built := p.buildItems(entity, gap, true)
+				items = append(items, built...)
+				itemCount += p.itemsPerEmit
+			} else {
+				// Older gap: chunk into fixed intervals for batching
+				chunks := alignedChunks(gap, p.chunkSize)
+				for _, chunk := range chunks {
+					if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
+						break
+					}
+					built := p.buildItems(entity, chunk, false)
+					items = append(items, built...)
+					itemCount += p.itemsPerEmit
+				}
+			}
+		}
+	}
+
+	return items
+}
+
 // deploymentBaseLabels finds the ServiceTarget matching a deployment ID and
 // returns a base label map. Falls back to just {"deployment_id": id}.
 func deploymentBaseLabels(deploymentID string, targets []ServiceTarget) map[string]string {

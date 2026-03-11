@@ -53,154 +53,61 @@ func (g *ServiceMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
 // Poll scans coverage gaps for all unique service+environment pairs,
 // prioritizes by recency (live edge first), and returns WorkItems.
 func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
-	if now.Before(g.nextPoll) {
-		return nil
-	}
-
-	targets := g.discovery.Targets()
-	if len(targets) == 0 {
-		return nil
-	}
-
-	svcEnvs := uniqueServiceEnvironments(targets)
-	retentionStart := now.Add(-g.metricRetention)
-
 	groupBy := []railway.MetricTag{
 		railway.MetricTagDeploymentId,
 		railway.MetricTagDeploymentInstanceId,
 		railway.MetricTagRegion,
 	}
 
-	var items []WorkItem
-	itemCount := 0
-
-	for _, target := range svcEnvs {
-		if itemCount >= g.maxItemsPerPoll {
-			break
-		}
-
-		compositeKey := target.CompositeKey()
-		coverageKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
-		existing, err := LoadCoverage(g.store, coverageKey)
-		if err != nil {
-			g.logger.Warn("failed to load service metric coverage",
-				"service_id", target.ServiceID, "environment_id", target.EnvironmentID, "error", err)
-			continue
-		}
-
-		gaps := FindGaps(existing, retentionStart, now)
-		if len(gaps) == 0 {
-			continue
-		}
-
-		var totalGapDuration time.Duration
-		for _, gap := range gaps {
-			totalGapDuration += gap.End.Sub(gap.Start)
-		}
-		g.logger.Debug("service metric coverage gaps found",
-			"service_id", target.ServiceID,
-			"environment_id", target.EnvironmentID,
-			"gaps", len(gaps),
-			"total_gap_duration", totalGapDuration,
-			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
-		)
-
-		prioritized := PrioritizeGaps(gaps, now)
-
-		for _, gap := range prioritized {
-			if itemCount >= g.maxItemsPerPoll {
-				break
-			}
-
-			// Live edge: gap ends at or near "now" (within 1 minute)
-			isLiveEdge := now.Sub(gap.End) < time.Minute
-
-			if isLiveEdge {
-				// If the gap is larger than one chunk, split the older
-				// portion into fixed chunks and only keep the tail as
-				// an open-ended live-edge query.
-				gapDuration := gap.End.Sub(gap.Start)
-				if gapDuration > g.chunkSize {
-					olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
-					chunks := alignedChunks(olderGap, g.chunkSize)
-					for _, chunk := range chunks {
-						if itemCount >= g.maxItemsPerPoll {
-							break
-						}
-						items = append(items, WorkItem{
-							ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryServiceMetrics,
-							TaskType: TaskTypeMetrics,
-							AliasKey: compositeKey,
-							BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
-							Params: map[string]any{
-								"serviceId":              target.ServiceID,
-								"environmentId":          target.EnvironmentID,
-								"startDate":              chunk.Start.Format(time.RFC3339),
-								"endDate":                chunk.End.Format(time.RFC3339),
-								"measurements":           g.measurements,
-								"groupBy":                groupBy,
-								"sampleRateSeconds":      g.sampleRate,
-								"averagingWindowSeconds": g.avgWindow,
-							},
-						})
-						itemCount++
-					}
-					gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
-				}
-
-				if itemCount >= g.maxItemsPerPoll {
-					break
-				}
-
-				// Open-ended query: no endDate, captures data up to "now"
-				items = append(items, WorkItem{
-					ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, gap.Start.Format(time.RFC3339)),
-					Kind:     QueryServiceMetrics,
-					TaskType: TaskTypeMetrics,
-					AliasKey: compositeKey,
-					BatchKey: metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow),
-					Params: map[string]any{
-						"serviceId":              target.ServiceID,
-						"environmentId":          target.EnvironmentID,
-						"startDate":              gap.Start.Format(time.RFC3339),
-						"measurements":           g.measurements,
-						"groupBy":                groupBy,
-						"sampleRateSeconds":      g.sampleRate,
-						"averagingWindowSeconds": g.avgWindow,
-					},
-				})
-				itemCount++
-			} else {
-				// Older gap: chunk into fixed intervals for batching
-				chunks := alignedChunks(gap, g.chunkSize)
-				for _, chunk := range chunks {
-					if itemCount >= g.maxItemsPerPoll {
-						break
-					}
-
-					items = append(items, WorkItem{
-						ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-						Kind:     QueryServiceMetrics,
-						TaskType: TaskTypeMetrics,
-						AliasKey: compositeKey,
-						BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
-						Params: map[string]any{
-							"serviceId":              target.ServiceID,
-							"environmentId":          target.EnvironmentID,
-							"startDate":              chunk.Start.Format(time.RFC3339),
-							"endDate":                chunk.End.Format(time.RFC3339),
-							"measurements":           g.measurements,
-							"groupBy":                groupBy,
-							"sampleRateSeconds":      g.sampleRate,
-							"averagingWindowSeconds": g.avgWindow,
-						},
-					})
-					itemCount++
+	items := pollCoverageGaps(now, gapPollParams{
+		store:           g.store,
+		discovery:       g.discovery,
+		logger:          g.logger,
+		metricRetention: g.metricRetention,
+		chunkSize:       g.chunkSize,
+		maxItemsPerPoll: g.maxItemsPerPoll,
+		nextPoll:        g.nextPoll,
+		itemsPerEmit:    1,
+		logPrefix:       "service metric",
+		entities: func(targets []ServiceTarget) []pollEntity {
+			svcEnvs := uniqueServiceEnvironments(targets)
+			entities := make([]pollEntity, len(svcEnvs))
+			for i, t := range svcEnvs {
+				entities[i] = pollEntity{
+					Key:          t.CompositeKey(),
+					CoverageType: CoverageTypeServiceMetric,
+					LogAttrs:     []any{"service_id", t.ServiceID, "environment_id", t.EnvironmentID},
+					Data:         t,
 				}
 			}
-		}
-	}
+			return entities
+		},
+		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+			t := entity.Data.(ServiceTarget)
+			params := map[string]any{
+				"serviceId":              t.ServiceID,
+				"environmentId":          t.EnvironmentID,
+				"startDate":              chunk.Start.Format(time.RFC3339),
+				"measurements":           g.measurements,
+				"groupBy":                groupBy,
+				"sampleRateSeconds":      g.sampleRate,
+				"averagingWindowSeconds": g.avgWindow,
+			}
+			batchKey := metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow)
+			if !isLiveEdge {
+				params["endDate"] = chunk.End.Format(time.RFC3339)
+				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
+			}
+			return []WorkItem{{
+				ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", t.ServiceID, t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
+				Kind:     QueryServiceMetrics,
+				TaskType: TaskTypeMetrics,
+				AliasKey: entity.Key,
+				BatchKey: batchKey,
+				Params:   params,
+			}}
+		},
+	})
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)

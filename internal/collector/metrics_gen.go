@@ -143,147 +143,58 @@ func alignedChunks(gap TimeRange, chunkSize time.Duration) []TimeRange {
 // first), and returns WorkItems. The live edge gets an open-ended query (no
 // endDate); older gaps are chunked into fixed intervals for batching.
 func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
-	if now.Before(g.nextPoll) {
-		return nil
-	}
-
-	targets := g.discovery.Targets()
-	if len(targets) == 0 {
-		return nil
-	}
-
-	projectIDs := uniqueProjectIDs(targets)
-	retentionStart := now.Add(-g.metricRetention)
-
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
 		railway.MetricTagEnvironmentId,
 		railway.MetricTagDeploymentId,
 	}
 
-	var items []WorkItem
-	itemCount := 0
-
-	for _, pid := range projectIDs {
-		if itemCount >= g.maxItemsPerPoll {
-			break
-		}
-
-		coverageKey := CoverageKey(pid, CoverageTypeMetric)
-		existing, err := LoadCoverage(g.store, coverageKey)
-		if err != nil {
-			g.logger.Warn("failed to load metric coverage",
-				"project_id", pid, "error", err)
-			continue
-		}
-
-		gaps := FindGaps(existing, retentionStart, now)
-		if len(gaps) == 0 {
-			continue
-		}
-
-		var totalGapDuration time.Duration
-		for _, gap := range gaps {
-			totalGapDuration += gap.End.Sub(gap.Start)
-		}
-		g.logger.Debug("metric coverage gaps found",
-			"project_id", pid,
-			"gaps", len(gaps),
-			"total_gap_duration", totalGapDuration,
-			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
-		)
-
-		prioritized := PrioritizeGaps(gaps, now)
-
-		for _, gap := range prioritized {
-			if itemCount >= g.maxItemsPerPoll {
-				break
-			}
-
-			// Live edge: gap ends at or near "now" (within 1 minute)
-			isLiveEdge := now.Sub(gap.End) < time.Minute
-
-			if isLiveEdge {
-				// If the gap is larger than one chunk, split the older
-				// portion into fixed chunks and only keep the tail as
-				// an open-ended live-edge query.
-				gapDuration := gap.End.Sub(gap.Start)
-				if gapDuration > g.chunkSize {
-					olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
-					chunks := alignedChunks(olderGap, g.chunkSize)
-					for _, chunk := range chunks {
-						if itemCount >= g.maxItemsPerPoll {
-							break
-						}
-						items = append(items, WorkItem{
-							ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryMetrics,
-							TaskType: TaskTypeMetrics,
-							AliasKey: pid,
-							BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
-							Params: map[string]any{
-								"startDate":              chunk.Start.Format(time.RFC3339),
-								"endDate":                chunk.End.Format(time.RFC3339),
-								"measurements":           g.measurements,
-								"groupBy":                groupBy,
-								"sampleRateSeconds":      g.sampleRate,
-								"averagingWindowSeconds": g.avgWindow,
-							},
-						})
-						itemCount++
-					}
-					// Adjust the live-edge start to the tail
-					gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
-				}
-
-				if itemCount >= g.maxItemsPerPoll {
-					break
-				}
-
-				// Open-ended query: no endDate, captures data up to "now"
-				items = append(items, WorkItem{
-					ID:       fmt.Sprintf("metrics:%s:%s", pid, gap.Start.Format(time.RFC3339)),
-					Kind:     QueryMetrics,
-					TaskType: TaskTypeMetrics,
-					AliasKey: pid,
-					BatchKey: metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow),
-					Params: map[string]any{
-						"startDate":              gap.Start.Format(time.RFC3339),
-						"measurements":           g.measurements,
-						"groupBy":                groupBy,
-						"sampleRateSeconds":      g.sampleRate,
-						"averagingWindowSeconds": g.avgWindow,
-					},
-				})
-				itemCount++
-			} else {
-				// Older gap: chunk into fixed intervals for batching
-				chunks := alignedChunks(gap, g.chunkSize)
-				for _, chunk := range chunks {
-					if itemCount >= g.maxItemsPerPoll {
-						break
-					}
-
-					items = append(items, WorkItem{
-						ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
-						Kind:     QueryMetrics,
-						TaskType: TaskTypeMetrics,
-						AliasKey: pid,
-						BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
-						Params: map[string]any{
-							"startDate":              chunk.Start.Format(time.RFC3339),
-							"endDate":                chunk.End.Format(time.RFC3339),
-							"measurements":           g.measurements,
-							"groupBy":                groupBy,
-							"sampleRateSeconds":      g.sampleRate,
-							"averagingWindowSeconds": g.avgWindow,
-						},
-					})
-					itemCount++
+	items := pollCoverageGaps(now, gapPollParams{
+		store:           g.store,
+		discovery:       g.discovery,
+		logger:          g.logger,
+		metricRetention: g.metricRetention,
+		chunkSize:       g.chunkSize,
+		maxItemsPerPoll: g.maxItemsPerPoll,
+		nextPoll:        g.nextPoll,
+		itemsPerEmit:    1,
+		logPrefix:       "metric",
+		entities: func(targets []ServiceTarget) []pollEntity {
+			pids := uniqueProjectIDs(targets)
+			entities := make([]pollEntity, len(pids))
+			for i, pid := range pids {
+				entities[i] = pollEntity{
+					Key:          pid,
+					CoverageType: CoverageTypeMetric,
+					LogAttrs:     []any{"project_id", pid},
 				}
 			}
-		}
-	}
+			return entities
+		},
+		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+			pid := entity.Key
+			params := map[string]any{
+				"startDate":              chunk.Start.Format(time.RFC3339),
+				"measurements":           g.measurements,
+				"groupBy":                groupBy,
+				"sampleRateSeconds":      g.sampleRate,
+				"averagingWindowSeconds": g.avgWindow,
+			}
+			batchKey := metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow)
+			if !isLiveEdge {
+				params["endDate"] = chunk.End.Format(time.RFC3339)
+				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
+			}
+			return []WorkItem{{
+				ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
+				Kind:     QueryMetrics,
+				TaskType: TaskTypeMetrics,
+				AliasKey: pid,
+				BatchKey: batchKey,
+				Params:   params,
+			}}
+		},
+	})
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)

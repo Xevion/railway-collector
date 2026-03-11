@@ -133,182 +133,75 @@ func (g *HttpMetricsGenerator) statusBatchKeyLive() string {
 // Poll scans coverage gaps for all unique service+environment pairs and emits
 // two WorkItems per target: one for duration percentiles, one for status counts.
 func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
-	if now.Before(g.nextPoll) {
-		return nil
-	}
+	items := pollCoverageGaps(now, gapPollParams{
+		store:           g.store,
+		discovery:       g.discovery,
+		logger:          g.logger,
+		metricRetention: g.metricRetention,
+		chunkSize:       g.chunkSize,
+		maxItemsPerPoll: g.maxItemsPerPoll,
+		nextPoll:        g.nextPoll,
+		itemsPerEmit:    2,
+		logPrefix:       "http metric",
+		entities: func(targets []ServiceTarget) []pollEntity {
+			svcEnvs := uniqueServiceEnvironments(targets)
+			entities := make([]pollEntity, len(svcEnvs))
+			for i, t := range svcEnvs {
+				entities[i] = pollEntity{
+					Key:          t.CompositeKey(),
+					CoverageType: CoverageTypeHTTPMetric,
+					LogAttrs:     []any{"service_id", t.ServiceID, "environment_id", t.EnvironmentID},
+					Data:         t,
+				}
+			}
+			return entities
+		},
+		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+			t := entity.Data.(ServiceTarget)
 
-	targets := g.discovery.Targets()
-	if len(targets) == 0 {
-		return nil
-	}
-
-	svcEnvs := uniqueServiceEnvironments(targets)
-	retentionStart := now.Add(-g.metricRetention)
-
-	var items []WorkItem
-	itemCount := 0
-
-	for _, target := range svcEnvs {
-		if itemCount >= g.maxItemsPerPoll {
-			break
-		}
-
-		compositeKey := target.CompositeKey()
-		coverageKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
-		existing, err := LoadCoverage(g.store, coverageKey)
-		if err != nil {
-			g.logger.Warn("failed to load http metric coverage",
-				"service_id", target.ServiceID, "environment_id", target.EnvironmentID, "error", err)
-			continue
-		}
-
-		gaps := FindGaps(existing, retentionStart, now)
-		if len(gaps) == 0 {
-			continue
-		}
-
-		var totalGapDuration time.Duration
-		for _, gap := range gaps {
-			totalGapDuration += gap.End.Sub(gap.Start)
-		}
-		g.logger.Debug("http metric coverage gaps found",
-			"service_id", target.ServiceID,
-			"environment_id", target.EnvironmentID,
-			"gaps", len(gaps),
-			"total_gap_duration", totalGapDuration,
-			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
-		)
-
-		prioritized := PrioritizeGaps(gaps, now)
-
-		for _, gap := range prioritized {
-			if itemCount+2 > g.maxItemsPerPoll {
-				break // need room for both duration + status items
+			// HTTP endpoints always require endDate; for live edge use now
+			endDate := chunk.End.Format(time.RFC3339)
+			durBatchKey := g.durationBatchKey(chunk.Start, chunk.End)
+			statusBatchKey := g.statusBatchKey(chunk.Start, chunk.End)
+			if isLiveEdge {
+				endDate = now.Format(time.RFC3339)
+				durBatchKey = g.durationBatchKeyLive()
+				statusBatchKey = g.statusBatchKeyLive()
 			}
 
-			isLiveEdge := now.Sub(gap.End) < time.Minute
-
-			if isLiveEdge {
-				// If the gap is larger than one chunk, split the older
-				// portion into fixed chunks and only keep the tail as live edge.
-				gapDuration := gap.End.Sub(gap.Start)
-				if gapDuration > g.chunkSize {
-					olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
-					chunks := alignedChunks(olderGap, g.chunkSize)
-					for _, chunk := range chunks {
-						if itemCount+2 > g.maxItemsPerPoll {
-							break
-						}
-						items = append(items, WorkItem{
-							ID:       fmt.Sprintf("http-duration:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryHttpDurationMetrics,
-							TaskType: TaskTypeMetrics,
-							AliasKey: compositeKey,
-							BatchKey: g.durationBatchKey(chunk.Start, chunk.End),
-							Params: map[string]any{
-								"serviceId":     target.ServiceID,
-								"environmentId": target.EnvironmentID,
-								"startDate":     chunk.Start.Format(time.RFC3339),
-								"endDate":       chunk.End.Format(time.RFC3339),
-								"stepSeconds":   g.stepSeconds,
-							},
-						})
-						items = append(items, WorkItem{
-							ID:       fmt.Sprintf("http-status:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryHttpMetricsGroupedByStatus,
-							TaskType: TaskTypeMetrics,
-							AliasKey: compositeKey,
-							BatchKey: g.statusBatchKey(chunk.Start, chunk.End),
-							Params: map[string]any{
-								"serviceId":     target.ServiceID,
-								"environmentId": target.EnvironmentID,
-								"startDate":     chunk.Start.Format(time.RFC3339),
-								"endDate":       chunk.End.Format(time.RFC3339),
-								"stepSeconds":   g.stepSeconds,
-							},
-						})
-						itemCount += 2
-					}
-					gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
-				}
-
-				if itemCount+2 > g.maxItemsPerPoll {
-					break
-				}
-
-				// HTTP metrics endpoints require endDate (DateTime!), so use now for live edge
-				endDate := now.Format(time.RFC3339)
-
-				// Two items share the same coverage but have different Kinds
-				items = append(items, WorkItem{
-					ID:       fmt.Sprintf("http-duration:%s:%s:%s", target.ServiceID, target.EnvironmentID, gap.Start.Format(time.RFC3339)),
+			startDate := chunk.Start.Format(time.RFC3339)
+			return []WorkItem{
+				{
+					ID:       fmt.Sprintf("http-duration:%s:%s:%s", t.ServiceID, t.EnvironmentID, startDate),
 					Kind:     QueryHttpDurationMetrics,
 					TaskType: TaskTypeMetrics,
-					AliasKey: compositeKey,
-					BatchKey: g.durationBatchKeyLive(),
+					AliasKey: entity.Key,
+					BatchKey: durBatchKey,
 					Params: map[string]any{
-						"serviceId":     target.ServiceID,
-						"environmentId": target.EnvironmentID,
-						"startDate":     gap.Start.Format(time.RFC3339),
+						"serviceId":     t.ServiceID,
+						"environmentId": t.EnvironmentID,
+						"startDate":     startDate,
 						"endDate":       endDate,
 						"stepSeconds":   g.stepSeconds,
 					},
-				})
-				items = append(items, WorkItem{
-					ID:       fmt.Sprintf("http-status:%s:%s:%s", target.ServiceID, target.EnvironmentID, gap.Start.Format(time.RFC3339)),
+				},
+				{
+					ID:       fmt.Sprintf("http-status:%s:%s:%s", t.ServiceID, t.EnvironmentID, startDate),
 					Kind:     QueryHttpMetricsGroupedByStatus,
 					TaskType: TaskTypeMetrics,
-					AliasKey: compositeKey,
-					BatchKey: g.statusBatchKeyLive(),
+					AliasKey: entity.Key,
+					BatchKey: statusBatchKey,
 					Params: map[string]any{
-						"serviceId":     target.ServiceID,
-						"environmentId": target.EnvironmentID,
-						"startDate":     gap.Start.Format(time.RFC3339),
+						"serviceId":     t.ServiceID,
+						"environmentId": t.EnvironmentID,
+						"startDate":     startDate,
 						"endDate":       endDate,
 						"stepSeconds":   g.stepSeconds,
 					},
-				})
-				itemCount += 2
-			} else {
-				chunks := alignedChunks(gap, g.chunkSize)
-				for _, chunk := range chunks {
-					if itemCount+2 > g.maxItemsPerPoll {
-						break // need room for both duration + status items
-					}
-
-					items = append(items, WorkItem{
-						ID:       fmt.Sprintf("http-duration:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-						Kind:     QueryHttpDurationMetrics,
-						TaskType: TaskTypeMetrics,
-						AliasKey: compositeKey,
-						BatchKey: g.durationBatchKey(chunk.Start, chunk.End),
-						Params: map[string]any{
-							"serviceId":     target.ServiceID,
-							"environmentId": target.EnvironmentID,
-							"startDate":     chunk.Start.Format(time.RFC3339),
-							"endDate":       chunk.End.Format(time.RFC3339),
-							"stepSeconds":   g.stepSeconds,
-						},
-					})
-					items = append(items, WorkItem{
-						ID:       fmt.Sprintf("http-status:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-						Kind:     QueryHttpMetricsGroupedByStatus,
-						TaskType: TaskTypeMetrics,
-						AliasKey: compositeKey,
-						BatchKey: g.statusBatchKey(chunk.Start, chunk.End),
-						Params: map[string]any{
-							"serviceId":     target.ServiceID,
-							"environmentId": target.EnvironmentID,
-							"startDate":     chunk.Start.Format(time.RFC3339),
-							"endDate":       chunk.End.Format(time.RFC3339),
-							"stepSeconds":   g.stepSeconds,
-						},
-					})
-					itemCount += 2
-				}
+				},
 			}
-		}
-	}
+		},
+	})
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
