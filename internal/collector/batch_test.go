@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,9 +31,9 @@ func TestFragmentFromWorkItem_Metrics(t *testing.T) {
 	}
 
 	f := collector.FragmentFromWorkItem(item, time.Now())
-	alias := railway.SanitizeAlias("proj-a")
+	alias := f.Alias
 
-	assert.Equal(t, alias, f.Alias)
+	assert.Contains(t, alias, "p_proj_a")
 	assert.Equal(t, "metrics", f.Field)
 	assert.Equal(t, loader.BreadthMetrics, f.Breadth)
 	assert.Contains(t, f.Args, `projectId: "proj-a"`)
@@ -55,7 +54,7 @@ func TestFragmentFromWorkItem_MetricsNoEndDate(t *testing.T) {
 	}
 
 	f := collector.FragmentFromWorkItem(item, time.Now())
-	alias := railway.SanitizeAlias("proj-a")
+	alias := f.Alias
 
 	_, hasEndDate := f.VarValues["endDate_"+alias]
 	assert.False(t, hasEndDate, "realtime items should not have endDate")
@@ -73,9 +72,9 @@ func TestFragmentFromWorkItem_EnvironmentLogs(t *testing.T) {
 	}
 
 	f := collector.FragmentFromWorkItem(item, time.Now())
-	alias := railway.SanitizeAlias("env-a")
+	alias := f.Alias
 
-	assert.Equal(t, alias, f.Alias)
+	assert.Contains(t, alias, "p_env_a")
 	assert.Equal(t, "environmentLogs", f.Field)
 	assert.Equal(t, loader.BreadthEnvironmentLogs, f.Breadth)
 	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["afterDate_"+alias])
@@ -94,9 +93,8 @@ func TestFragmentFromWorkItem_BuildLogs(t *testing.T) {
 	}
 
 	f := collector.FragmentFromWorkItem(item, time.Now())
-	depAlias := railway.SanitizeAlias("dep-a") + "_build"
 
-	assert.Equal(t, depAlias, f.Alias)
+	assert.Contains(t, f.Alias, "p_dep_a_build")
 	assert.Equal(t, "buildLogs", f.Field)
 	assert.Equal(t, loader.BreadthBuildLogs, f.Breadth)
 }
@@ -112,9 +110,8 @@ func TestFragmentFromWorkItem_HttpLogs(t *testing.T) {
 	}
 
 	f := collector.FragmentFromWorkItem(item, time.Now())
-	depAlias := railway.SanitizeAlias("dep-a") + "_http"
 
-	assert.Equal(t, depAlias, f.Alias)
+	assert.Contains(t, f.Alias, "p_dep_a_http")
 	assert.Equal(t, "httpLogs", f.Field)
 	assert.Equal(t, loader.BreadthHttpLogs, f.Breadth)
 }
@@ -209,13 +206,13 @@ func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
 	query, vars := req.AssembleQuery()
 
 	assert.Contains(t, query, "query Batch(")
-	assert.Contains(t, query, "p_proj_a: metrics(")
-	assert.Contains(t, query, "p_env_a: environmentLogs(")
+	assert.Contains(t, query, f1.Alias+": metrics(")
+	assert.Contains(t, query, f2.Alias+": environmentLogs(")
 
 	// Variables are fully namespaced per alias
-	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate_p_proj_a"])
-	assert.Equal(t, "2025-01-01T00:00:00Z", vars["afterDate_p_env_a"])
-	assert.Equal(t, 500, vars["afterLimit_p_env_a"])
+	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate_"+f1.Alias])
+	assert.Equal(t, "2025-01-01T00:00:00Z", vars["afterDate_"+f2.Alias])
+	assert.Equal(t, 500, vars["afterLimit_"+f2.Alias])
 }
 
 func TestSortByPriority(t *testing.T) {
@@ -457,7 +454,7 @@ func TestFragmentFromWorkItem_ByKind(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := collector.FragmentFromWorkItem(tt.item, time.Now())
-			assert.True(t, strings.HasSuffix(f.Alias, tt.wantSuffix), "alias %s should end with %s", f.Alias, tt.wantSuffix)
+			assert.Contains(t, f.Alias, tt.wantSuffix, "alias %s should contain %s", f.Alias, tt.wantSuffix)
 			assert.Equal(t, tt.wantField, f.Field)
 			assert.Equal(t, tt.wantBreadth, f.Breadth)
 			for _, arg := range tt.wantArgs {

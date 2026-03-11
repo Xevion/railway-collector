@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,20 @@ import (
 	"github.com/xevion/railway-collector/internal/railway"
 	"go.uber.org/mock/gomock"
 )
+
+// aliasRe extracts GraphQL aliases from assembled query strings.
+// Matches lines like "    p_proj_a_42: metrics(...)" and captures the alias.
+var aliasRe = regexp.MustCompile(`(?m)^\s+(\w+):\s+\w+\(`)
+
+// extractAliases returns all GraphQL field aliases from a query string.
+func extractAliases(query string) []string {
+	matches := aliasRe.FindAllStringSubmatch(query, -1)
+	aliases := make([]string, len(matches))
+	for i, m := range matches {
+		aliases[i] = m[1]
+	}
+	return aliases
+}
 
 // countingHandler is a slog.Handler that counts log records matching a pattern.
 type countingHandler struct {
@@ -162,17 +177,14 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 		},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-	aliasB := railway.SanitizeAlias("proj-b")
-
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
-			return &railway.RawQueryResponse{
-				Data: map[string]json.RawMessage{
-					aliasA: json.RawMessage(`[{"measurement":"CPU_USAGE","tags":{},"values":[{"ts":1000,"value":0.5}]}]`),
-					aliasB: json.RawMessage(`[{"measurement":"CPU_USAGE","tags":{},"values":[{"ts":2000,"value":0.7}]}]`),
-				},
-			}, nil
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[{"measurement":"CPU_USAGE","tags":{},"values":[{"ts":1000,"value":0.5}]}]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
 		}).Times(1)
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
@@ -294,18 +306,15 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 		},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-	envAlias := railway.SanitizeAlias("env-a")
-
 	// Both metrics and logs should be packed into one request.
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
-			return &railway.RawQueryResponse{
-				Data: map[string]json.RawMessage{
-					aliasA:   json.RawMessage(`[]`),
-					envAlias: json.RawMessage(`[]`),
-				},
-			}, nil
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
 		}).Times(1)
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
@@ -413,14 +422,15 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).AnyTimes()
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).AnyTimes()
 
 	// remaining=5 out of estimated 1000 = 0.5% -> Scarce.
 	api.EXPECT().RateLimitInfo().Return(5, time.Now().Add(time.Hour)).AnyTimes()
@@ -459,14 +469,15 @@ func TestUnifiedScheduler_DefaultConfig(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).Times(1)
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).Times(1)
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
@@ -513,13 +524,15 @@ func TestUnifiedScheduler_NonDefaultConfig(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).Times(1)
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).Times(1)
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
@@ -707,14 +720,15 @@ func TestUnifiedScheduler_DiscoveryPiggybackWithQueries(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).Times(1)
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).Times(1)
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
@@ -769,16 +783,15 @@ func TestUnifiedScheduler_PartialCreditDeduction(t *testing.T) {
 		},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	// Only metrics should be in the query (logs skipped).
 	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
-			return &railway.RawQueryResponse{
-				Data: map[string]json.RawMessage{
-					aliasA: json.RawMessage(`[]`),
-				},
-			}, nil
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
 		}).Times(1)
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
@@ -831,14 +844,15 @@ func TestUnifiedScheduler_UpdateRateState_ExhaustedRemaining(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).AnyTimes()
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).AnyTimes()
 
 	// remaining=0 -> exhausted regime, rate limiter set to 0.001.
 	api.EXPECT().RateLimitInfo().Return(0, fakeClock.Now().Add(time.Hour)).AnyTimes()
@@ -876,14 +890,15 @@ func TestUnifiedScheduler_UpdateRateState_HighRemaining(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).AnyTimes()
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).AnyTimes()
 
 	// 900 remaining out of estimated 1000 = 90% -> Abundant.
 	api.EXPECT().RateLimitInfo().Return(900, fakeClock.Now().Add(time.Hour)).AnyTimes()
@@ -931,14 +946,15 @@ func TestUnifiedScheduler_UpdateRateState_RateCappedAtMaxRPS(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).AnyTimes()
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).AnyTimes()
 
 	// Very high remaining with short reset -> computed rate >> MaxRPS.
 	api.EXPECT().RateLimitInfo().Return(50000, fakeClock.Now().Add(10*time.Second)).AnyTimes()
@@ -977,14 +993,15 @@ func TestUnifiedScheduler_UpdateRateState_LowRemainingPositive(t *testing.T) {
 		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
-	aliasA := railway.SanitizeAlias("proj-a")
-
 	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&railway.RawQueryResponse{
-			Data: map[string]json.RawMessage{
-				aliasA: json.RawMessage(`[]`),
-			},
-		}, nil).AnyTimes()
+		DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			aliases := extractAliases(query)
+			data := make(map[string]json.RawMessage, len(aliases))
+			for _, a := range aliases {
+				data[a] = json.RawMessage(`[]`)
+			}
+			return &railway.RawQueryResponse{Data: data}, nil
+		}).AnyTimes()
 
 	// remaining=1 -> scarce (0.1%), not exhausted (remaining > 0).
 	api.EXPECT().RateLimitInfo().Return(1, fakeClock.Now().Add(time.Hour)).AnyTimes()
@@ -1103,9 +1120,6 @@ func TestUnifiedScheduler_DiscoveryOnlyNoCredits(t *testing.T) {
 }
 
 func TestUnifiedScheduler_RetriesOnComputationLimit(t *testing.T) {
-	aliasA := railway.SanitizeAlias("proj-a")
-	aliasB := railway.SanitizeAlias("proj-b")
-
 	cases := []struct {
 		name          string
 		firstResponse *railway.RawQueryResponse
@@ -1142,18 +1156,18 @@ func TestUnifiedScheduler_RetriesOnComputationLimit(t *testing.T) {
 
 			callCount := atomic.Int32{}
 			api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
-				DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
+				DoAndReturn(func(_ context.Context, _, query string, _ map[string]any) (*railway.RawQueryResponse, error) {
 					n := callCount.Add(1)
 					if n == 1 {
 						return tc.firstResponse, tc.firstErr
 					}
 					// Subsequent individual retries succeed.
-					return &railway.RawQueryResponse{
-						Data: map[string]json.RawMessage{
-							aliasA: json.RawMessage(`[]`),
-							aliasB: json.RawMessage(`[]`),
-						},
-					}, nil
+					aliases := extractAliases(query)
+					data := make(map[string]json.RawMessage, len(aliases))
+					for _, a := range aliases {
+						data[a] = json.RawMessage(`[]`)
+					}
+					return &railway.RawQueryResponse{Data: data}, nil
 				}).MinTimes(2)
 
 			// Return a short reset window so updateRateState keeps the rate limiter fast (near MaxRPS).

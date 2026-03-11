@@ -3,6 +3,7 @@ package collector
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/xevion/railway-collector/internal/collector/loader"
@@ -10,10 +11,22 @@ import (
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
+// fragmentSeq is a monotonically increasing counter that ensures every
+// AliasFragment gets a globally unique alias, even when multiple fragments
+// target the same entity+kind with different time ranges (coverage gap chunks).
+var fragmentSeq atomic.Uint64
+
 // sanitizeCompositeAlias wraps SanitizeAlias and additionally replaces colons
 // with underscores, for composite keys like "serviceID:envID".
 func sanitizeCompositeAlias(key string) string {
 	return strings.ReplaceAll(railway.SanitizeAlias(key), ":", "_")
+}
+
+// nextAlias appends a unique sequence number to a base alias string,
+// guaranteeing no two fragments share the same alias even when they target
+// the same entity+kind with different time ranges.
+func nextAlias(base string) string {
+	return fmt.Sprintf("%s_%d", base, fragmentSeq.Add(1)-1)
 }
 
 // fragmentBuilder accumulates namespaced GraphQL variable declarations, values,
@@ -158,7 +171,7 @@ func FragmentFromWorkItem(item types.WorkItem, now time.Time) loader.AliasFragme
 }
 
 func metricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey)
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey))
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
 	b.addVar("startDate", "DateTime!", item.Params["startDate"])
@@ -182,7 +195,7 @@ func metricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.Alias
 }
 
 func envLogsFragment(item types.WorkItem) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey)
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey))
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("environmentId", item.AliasKey)
 	b.addOptionalVar("afterDate", "String")
@@ -202,7 +215,7 @@ func envLogsFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func buildLogsFragment(item types.WorkItem) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey) + "_build"
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey) + "_build")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
 	b.addOptionalVar("limit", "Int")
@@ -221,7 +234,7 @@ func buildLogsFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func httpLogsFragment(item types.WorkItem) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey) + "_http"
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey) + "_http")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
 	b.addOptionalVar("limit", "Int")
@@ -241,7 +254,7 @@ func httpLogsFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
-	alias := sanitizeCompositeAlias(item.AliasKey) + "_svcmetrics"
+	alias := nextAlias(sanitizeCompositeAlias(item.AliasKey) + "_svcmetrics")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
 	b.addLiteral("environmentId", item.Params["environmentId"].(string))
@@ -266,7 +279,7 @@ func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loade
 }
 
 func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
-	alias := sanitizeCompositeAlias(item.AliasKey) + "_replica"
+	alias := nextAlias(sanitizeCompositeAlias(item.AliasKey) + "_replica")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
 	b.addLiteral("environmentId", item.Params["environmentId"].(string))
@@ -290,7 +303,7 @@ func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loade
 }
 
 func httpDurationMetricsFragment(item types.WorkItem) loader.AliasFragment {
-	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpdur"
+	alias := nextAlias(sanitizeCompositeAlias(item.AliasKey) + "_httpdur")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
 	b.addLiteral("environmentId", item.Params["environmentId"].(string))
@@ -312,7 +325,7 @@ func httpDurationMetricsFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func httpStatusMetricsFragment(item types.WorkItem) loader.AliasFragment {
-	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpstatus"
+	alias := nextAlias(sanitizeCompositeAlias(item.AliasKey) + "_httpstatus")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
 	b.addLiteral("environmentId", item.Params["environmentId"].(string))
@@ -334,7 +347,7 @@ func httpStatusMetricsFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func usageFragment(item types.WorkItem) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey) + "_usage"
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey) + "_usage")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
 	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
@@ -355,7 +368,7 @@ func usageFragment(item types.WorkItem) loader.AliasFragment {
 }
 
 func estimatedUsageFragment(item types.WorkItem) loader.AliasFragment {
-	alias := railway.SanitizeAlias(item.AliasKey) + "_estusage"
+	alias := nextAlias(railway.SanitizeAlias(item.AliasKey) + "_estusage")
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
 	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])

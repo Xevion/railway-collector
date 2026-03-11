@@ -338,7 +338,7 @@ func TestDispatchRequestResults(t *testing.T) {
 				gen := mocks.NewMockTaskGenerator(ctrl)
 				gen.EXPECT().Deliver(gomock.Any(), gomock.Any(), nil, gomock.Any()).
 					Do(func(_ context.Context, _ types.WorkItem, _ json.RawMessage, err error) {
-						assert.ErrorContains(t, err, `alias "a1" not found`)
+						assert.ErrorContains(t, err, `not found in response`)
 					})
 				genMap["a1"] = gen
 			},

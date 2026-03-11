@@ -404,7 +404,7 @@ func TestFragmentFromWorkItem_MetricsFields(t *testing.T) {
 	}
 	frag := collector.FragmentFromWorkItem(item, now)
 
-	assert.Equal(t, "p_proj_abc", frag.Alias)
+	assert.Contains(t, frag.Alias, "p_proj_abc")
 	assert.Equal(t, "metrics", frag.Field)
 	assert.Equal(t, railway.MetricsFieldBody, frag.Selection)
 	assert.Equal(t, loader.BreadthMetrics, frag.Breadth)
@@ -436,7 +436,7 @@ func TestFragmentFromWorkItem_MetricsOptionalVars(t *testing.T) {
 		frag := collector.FragmentFromWorkItem(item, now)
 
 		// sampleRateSeconds, groupBy, averagingWindowSeconds, endDate should all be in vars
-		alias := "p_proj_opt"
+		alias := frag.Alias
 		assert.Contains(t, frag.VarValues, "sampleRateSeconds_"+alias)
 		assert.Contains(t, frag.VarValues, "groupBy_"+alias)
 		assert.Contains(t, frag.VarValues, "averagingWindowSeconds_"+alias)
@@ -454,7 +454,7 @@ func TestFragmentFromWorkItem_MetricsOptionalVars(t *testing.T) {
 		}
 		frag := collector.FragmentFromWorkItem(item, now)
 
-		alias := "p_proj_noopt"
+		alias := frag.Alias
 		// Optional vars should NOT be present when params are missing
 		assert.NotContains(t, frag.VarValues, "sampleRateSeconds_"+alias)
 		assert.NotContains(t, frag.VarValues, "groupBy_"+alias)
@@ -533,12 +533,12 @@ func TestFragmentFromWorkItem_EnvLogsFields(t *testing.T) {
 		}
 		frag := collector.FragmentFromWorkItem(item, now)
 
-		assert.Equal(t, "p_env_abc", frag.Alias)
+		assert.Contains(t, frag.Alias, "p_env_abc")
 		assert.Equal(t, "environmentLogs", frag.Field)
 		assert.Equal(t, railway.EnvironmentLogsFieldBody, frag.Selection)
 		assert.Equal(t, loader.BreadthEnvironmentLogs, frag.Breadth)
 
-		alias := "p_env_abc"
+		alias := frag.Alias
 		assert.Contains(t, frag.VarValues, "afterDate_"+alias)
 		assert.Contains(t, frag.VarValues, "beforeDate_"+alias)
 		assert.Contains(t, frag.VarValues, "afterLimit_"+alias)
@@ -552,7 +552,7 @@ func TestFragmentFromWorkItem_EnvLogsFields(t *testing.T) {
 		}
 		frag := collector.FragmentFromWorkItem(item, now)
 
-		alias := "p_env_xyz"
+		alias := frag.Alias
 		assert.NotContains(t, frag.VarValues, "afterDate_"+alias)
 		assert.NotContains(t, frag.VarValues, "beforeDate_"+alias)
 		assert.NotContains(t, frag.VarValues, "afterLimit_"+alias)
@@ -617,7 +617,7 @@ func TestFragmentFromWorkItem_UsageFields(t *testing.T) {
 	assert.Equal(t, railway.UsageFieldBody, frag.Selection)
 	assert.Equal(t, loader.BreadthUsage, frag.Breadth)
 
-	alias := "p_proj_usage_usage"
+	alias := frag.Alias
 	assert.Contains(t, frag.VarValues, "startDate_"+alias)
 	assert.Contains(t, frag.VarValues, "endDate_"+alias)
 	assert.Contains(t, frag.VarValues, "groupBy_"+alias)

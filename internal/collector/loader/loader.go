@@ -199,7 +199,8 @@ func DispatchRequestResults(
 			if aliasErr := findAliasError(resp.Errors, alias); aliasErr != nil {
 				gen.Deliver(ctx, frag.Item, nil, aliasErr)
 			} else {
-				gen.Deliver(ctx, frag.Item, nil, fmt.Errorf("alias %q not found in response", alias))
+				gen.Deliver(ctx, frag.Item, nil, fmt.Errorf("alias %q (kind=%s, key=%s) not found in response",
+					alias, frag.Item.Kind, frag.Item.AliasKey))
 			}
 			continue
 		}
