@@ -10,7 +10,6 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
-	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/sink"
 )
 
@@ -440,10 +439,7 @@ func (g *HttpMetricsGenerator) deliverDuration(
 		}
 	}
 
-	level := slog.LevelDebug
-	if len(points) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(points))
 	g.logger.Log(ctx, level, "http duration metrics delivered",
 		"project", projectName,
 		"service", serviceName, "service_id", serviceID,
@@ -504,10 +500,7 @@ func (g *HttpMetricsGenerator) deliverStatus(
 		}
 	}
 
-	level := slog.LevelDebug
-	if len(points) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(points))
 	g.logger.Log(ctx, level, "http status metrics delivered",
 		"project", projectName,
 		"service", serviceName, "service_id", serviceID,

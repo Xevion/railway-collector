@@ -51,7 +51,7 @@ func openReader(flagPath, configPath string) (*state.Reader, error) {
 }
 
 // openWriter opens the state DB read-write using resolved path.
-func openWriter(flagPath, configPath string) (*state.Reader, error) {
+func openWriter(flagPath, configPath string) (*state.Writer, error) {
 	path := resolveStatePath(flagPath, configPath)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("state database not found: %s", path)

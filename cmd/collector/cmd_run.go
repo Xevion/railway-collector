@@ -158,14 +158,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	now := realClock.Now()
 
 	// Build credit allocator from config
-	creditCfg := collector.CreditConfig{
-		MetricsRate:   cfg.Collect.Credits.MetricsRate,
-		LogsRate:      cfg.Collect.Credits.LogsRate,
-		DiscoveryRate: cfg.Collect.Credits.DiscoveryRate,
-		UsageRate:     cfg.Collect.Credits.UsageRate,
-		MaxCredits:    cfg.Collect.Credits.MaxCredits,
-	}
-	credits := collector.NewCreditAllocator(creditCfg, now, logger)
+	credits := collector.NewCreditAllocator(cfg.Collect.Credits, now, logger)
 
 	// Build generators
 	var generators []collector.TaskGenerator

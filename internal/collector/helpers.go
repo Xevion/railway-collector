@@ -9,6 +9,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
 )
@@ -285,6 +286,14 @@ func metricsBatchKeyChunk(measurements []railway.MetricMeasurement, sampleRate, 
 	return fmt.Sprintf("sr=%d,aw=%d,m=%s,s=%s,e=%s",
 		sampleRate, avgWindow, strings.Join(parts, "+"),
 		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
+}
+
+// deliveryLogLevel returns LevelTrace for empty deliveries, LevelDebug otherwise.
+func deliveryLogLevel(count int) slog.Level {
+	if count == 0 {
+		return logging.LevelTrace
+	}
+	return slog.LevelDebug
 }
 
 // writeMetricsToSinks writes metric points to all sinks, logging errors.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/xevion/railway-collector/internal/logging"
@@ -294,10 +293,7 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 		)
 	}
 
-	level := slog.LevelDebug
-	if len(points) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(points))
 	g.logger.Log(ctx, level, "replica metrics delivered",
 		"project", projectName,
 		"service", serviceName, "service_id", serviceID,

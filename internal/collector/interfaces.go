@@ -100,6 +100,25 @@ type StateStore interface {
 	Close() error
 }
 
+// ServiceTarget represents a discovered service to collect metrics/logs from.
+type ServiceTarget struct {
+	ProjectID       string
+	ProjectName     string
+	ServiceID       string
+	ServiceName     string
+	EnvironmentID   string
+	EnvironmentName string
+	// Latest active deployment ID (if any)
+	DeploymentID string
+	Region       string
+}
+
+// CompositeKey returns the service:environment composite key used for
+// per-service coverage tracking and work item aliasing.
+func (t ServiceTarget) CompositeKey() string {
+	return t.ServiceID + ":" + t.EnvironmentID
+}
+
 // TargetProvider abstracts discovery for testing.
 type TargetProvider interface {
 	Targets() []ServiceTarget

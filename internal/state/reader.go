@@ -31,6 +31,12 @@ type Reader struct {
 	db *bolt.DB
 }
 
+// Writer provides read-write access to the state database.
+// Embeds Reader so all read operations are available.
+type Writer struct {
+	*Reader
+}
+
 // OpenReadOnly opens the state database in read-only mode.
 // Safe to call while the collector is running (uses shared flock).
 func OpenReadOnly(path string) (*Reader, error) {
@@ -46,14 +52,14 @@ func OpenReadOnly(path string) (*Reader, error) {
 
 // OpenReadWrite opens the state database in read-write mode.
 // Fails if the collector (or another writer) holds the lock.
-func OpenReadWrite(path string) (*Reader, error) {
+func OpenReadWrite(path string) (*Writer, error) {
 	db, err := bolt.Open(path, 0600, &bolt.Options{
 		Timeout: 2 * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("opening state db %s (is the collector running?): %w", path, err)
 	}
-	return &Reader{db: db}, nil
+	return &Writer{Reader: &Reader{db: db}}, nil
 }
 
 // Close closes the underlying database.
@@ -158,11 +164,10 @@ func (r *Reader) DBFileSize() (int64, error) {
 }
 
 // DeleteBucket deletes all entries from a named bucket.
-// Requires the database to be opened with OpenReadWrite.
-func (r *Reader) DeleteBucket(bucketName string) (int, error) {
+func (w *Writer) DeleteBucket(bucketName string) (int, error) {
 	name := []byte(bucketName)
 	count := 0
-	err := r.db.Update(func(tx *bolt.Tx) error {
+	err := w.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(name)
 		if b == nil {
 			return fmt.Errorf("bucket %q not found", bucketName)
@@ -181,9 +186,8 @@ func (r *Reader) DeleteBucket(bucketName string) (int, error) {
 }
 
 // DeleteKey deletes a single key from a named bucket.
-// Requires the database to be opened with OpenReadWrite.
-func (r *Reader) DeleteKey(bucketName, key string) error {
-	return r.db.Update(func(tx *bolt.Tx) error {
+func (w *Writer) DeleteKey(bucketName, key string) error {
+	return w.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
 			return fmt.Errorf("bucket %q not found", bucketName)

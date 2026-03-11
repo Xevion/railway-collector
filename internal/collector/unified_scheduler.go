@@ -273,7 +273,13 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 }
 
-// handleDiscoveryItems executes discovery refresh via the TargetProvider's
+// refresher is implemented by generators that perform a refresh instead of
+// a raw GraphQL query (e.g., DiscoveryGenerator).
+type refresher interface {
+	Refresh(ctx context.Context) error
+}
+
+// handleDiscoveryItems executes discovery refresh via the generator's
 // Refresh method rather than building a raw query.
 func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []WorkItem, generatorMap map[string]TaskGenerator) {
 	gen, ok := s.generatorsByType[TaskTypeDiscovery]
@@ -282,15 +288,17 @@ func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []Wor
 		return
 	}
 
-	if dg, ok := gen.(*DiscoveryGenerator); ok {
-		err := dg.Refresh(ctx)
-		for _, item := range items {
-			if g, exists := generatorMap[item.ID]; exists {
-				g.Deliver(ctx, item, nil, err)
-			}
-		}
-	} else {
+	r, ok := gen.(refresher)
+	if !ok {
 		s.cfg.Logger.Error("discovery generator does not support Refresh")
+		return
+	}
+
+	err := r.Refresh(ctx)
+	for _, item := range items {
+		if g, exists := generatorMap[item.ID]; exists {
+			g.Deliver(ctx, item, nil, err)
+		}
 	}
 }
 

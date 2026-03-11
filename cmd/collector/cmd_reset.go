@@ -21,21 +21,21 @@ func (cmd *ResetCmd) Run(c *CLI) error {
 		return fmt.Errorf("unknown bucket %q; valid: log_cursors, discovery_cache, coverage", cmd.Bucket)
 	}
 
-	reader, err := openWriter(c.State, c.Config)
+	writer, err := openWriter(c.State, c.Config)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer writer.Close()
 
 	if cmd.Key != "" {
-		if err := reader.DeleteKey(cmd.Bucket, cmd.Key); err != nil {
+		if err := writer.DeleteKey(cmd.Bucket, cmd.Key); err != nil {
 			return err
 		}
 		fmt.Printf("Deleted key %q from %s.\n", cmd.Key, cmd.Bucket)
 		return nil
 	}
 
-	count, err := reader.DeleteBucket(cmd.Bucket)
+	count, err := writer.DeleteBucket(cmd.Bucket)
 	if err != nil {
 		return err
 	}

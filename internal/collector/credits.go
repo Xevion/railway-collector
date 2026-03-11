@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/logging"
 )
 
@@ -37,20 +38,9 @@ func (r Regime) String() string {
 	}
 }
 
-// CreditConfig defines the base credit allocation per task type at 16 req/min.
-type CreditConfig struct {
-	// Credits per minute for each task type at full rate
-	MetricsRate   float64
-	LogsRate      float64
-	DiscoveryRate float64
-	UsageRate     float64
-	// Maximum accumulated credits per type (prevents burst after idle)
-	MaxCredits float64
-}
-
 // DefaultCreditConfig returns the default credit allocation.
-func DefaultCreditConfig() CreditConfig {
-	return CreditConfig{
+func DefaultCreditConfig() config.CreditsConfig {
+	return config.CreditsConfig{
 		MetricsRate:   8.0, // absorbs most budget (metrics + gap filling)
 		LogsRate:      6.0, // env log gap filling + build/http logs
 		DiscoveryRate: 1.0, // 1/min, mostly unused (TTL cached)
@@ -109,13 +99,13 @@ func (p *creditPool) setRate(creditsPerMinute float64) {
 type CreditAllocator struct {
 	mu     sync.Mutex
 	pools  map[TaskType]*creditPool
-	config CreditConfig
+	config config.CreditsConfig
 	regime Regime
 	logger *slog.Logger
 }
 
 // NewCreditAllocator creates a new allocator with default credit pools.
-func NewCreditAllocator(cfg CreditConfig, now time.Time, logger *slog.Logger) *CreditAllocator {
+func NewCreditAllocator(cfg config.CreditsConfig, now time.Time, logger *slog.Logger) *CreditAllocator {
 	return &CreditAllocator{
 		pools: map[TaskType]*creditPool{
 			TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),

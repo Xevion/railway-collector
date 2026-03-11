@@ -502,10 +502,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 		}
 	}
 
-	level := slog.LevelDebug
-	if len(entries) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "environment logs delivered",
 		"environment", envName, "environment_id", envID, "entries", len(entries),
 		"start", afterDateStr, "end", covEnd.Format(time.RFC3339Nano))
@@ -582,10 +579,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 		}
 	}
 
-	level := slog.LevelDebug
-	if len(entries) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
 		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
@@ -675,10 +669,7 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 		}
 	}
 
-	level := slog.LevelDebug
-	if len(entries) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
 		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 

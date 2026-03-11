@@ -266,10 +266,7 @@ func (g *UsageGenerator) deliverUsage(
 		)
 	}
 
-	level := slog.LevelDebug
-	if len(points) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(points))
 	g.logger.Log(ctx, level, "usage delivered",
 		"project", projectName, "project_id", projectID,
 		"results", len(results), "points", len(points),
@@ -323,10 +320,7 @@ func (g *UsageGenerator) deliverEstimatedUsage(
 		)
 	}
 
-	level := slog.LevelDebug
-	if len(points) == 0 {
-		level = logging.LevelTrace
-	}
+	level := deliveryLogLevel(len(points))
 	g.logger.Log(ctx, level, "estimated usage delivered",
 		"project", projectName, "project_id", projectID,
 		"results", len(results), "points", len(points),
