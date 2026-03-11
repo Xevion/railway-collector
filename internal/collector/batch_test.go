@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/loader"
 	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 )
@@ -35,7 +36,7 @@ func TestFragmentFromWorkItem_Metrics(t *testing.T) {
 
 	assert.Equal(t, alias, f.Alias)
 	assert.Equal(t, "metrics", f.Field)
-	assert.Equal(t, collector.BreadthMetrics, f.Breadth)
+	assert.Equal(t, loader.BreadthMetrics, f.Breadth)
 	assert.Contains(t, f.Args, `projectId: "proj-a"`)
 	assert.Contains(t, f.Args, "startDate: $startDate_"+alias)
 	assert.Contains(t, f.Args, "endDate: $endDate_"+alias)
@@ -76,7 +77,7 @@ func TestFragmentFromWorkItem_EnvironmentLogs(t *testing.T) {
 
 	assert.Equal(t, alias, f.Alias)
 	assert.Equal(t, "environmentLogs", f.Field)
-	assert.Equal(t, collector.BreadthEnvironmentLogs, f.Breadth)
+	assert.Equal(t, loader.BreadthEnvironmentLogs, f.Breadth)
 	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["afterDate_"+alias])
 	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["beforeDate_"+alias])
 	assert.Equal(t, 500, f.VarValues["afterLimit_"+alias])
@@ -97,7 +98,7 @@ func TestFragmentFromWorkItem_BuildLogs(t *testing.T) {
 
 	assert.Equal(t, depAlias, f.Alias)
 	assert.Equal(t, "buildLogs", f.Field)
-	assert.Equal(t, collector.BreadthBuildLogs, f.Breadth)
+	assert.Equal(t, loader.BreadthBuildLogs, f.Breadth)
 }
 
 func TestFragmentFromWorkItem_HttpLogs(t *testing.T) {
@@ -115,20 +116,20 @@ func TestFragmentFromWorkItem_HttpLogs(t *testing.T) {
 
 	assert.Equal(t, depAlias, f.Alias)
 	assert.Equal(t, "httpLogs", f.Field)
-	assert.Equal(t, collector.BreadthHttpLogs, f.Breadth)
+	assert.Equal(t, loader.BreadthHttpLogs, f.Breadth)
 }
 
 func TestPack_FitsWithinBreadthBudget(t *testing.T) {
 	// 15 metrics fragments × 12 breadth = 180, fits in one request (under 20 alias cap)
-	var fragments []collector.AliasFragment
+	var fragments []loader.AliasFragment
 	for i := 0; i < 15; i++ {
-		fragments = append(fragments, collector.AliasFragment{
+		fragments = append(fragments, loader.AliasFragment{
 			Alias:   fmt.Sprintf("alias_%d", i),
-			Breadth: collector.BreadthMetrics, // 12
+			Breadth: loader.BreadthMetrics, // 12
 		})
 	}
 
-	requests := collector.Pack(fragments)
+	requests := loader.Pack(fragments)
 	require.Len(t, requests, 1)
 	assert.Equal(t, 180, requests[0].Breadth)
 	assert.Len(t, requests[0].Fragments, 15)
@@ -136,31 +137,31 @@ func TestPack_FitsWithinBreadthBudget(t *testing.T) {
 
 func TestPack_SplitsAtAliasLimit(t *testing.T) {
 	// 25 metrics fragments: first 20 in request 1, remaining 5 in request 2
-	var fragments []collector.AliasFragment
+	var fragments []loader.AliasFragment
 	for i := 0; i < 25; i++ {
-		fragments = append(fragments, collector.AliasFragment{
+		fragments = append(fragments, loader.AliasFragment{
 			Alias:   fmt.Sprintf("alias_%d", i),
-			Breadth: collector.BreadthMetrics,
+			Breadth: loader.BreadthMetrics,
 		})
 	}
 
-	requests := collector.Pack(fragments)
+	requests := loader.Pack(fragments)
 	require.Len(t, requests, 2)
-	assert.Len(t, requests[0].Fragments, collector.MaxAliasesPerRequest)
+	assert.Len(t, requests[0].Fragments, loader.MaxAliasesPerRequest)
 	assert.Len(t, requests[1].Fragments, 5)
 }
 
 func TestPack_SplitsAtBreadthLimit(t *testing.T) {
 	// 5 fragments with breadth 120 each = 600 > 500, splits at 4 (480)
-	var fragments []collector.AliasFragment
+	var fragments []loader.AliasFragment
 	for i := 0; i < 5; i++ {
-		fragments = append(fragments, collector.AliasFragment{
+		fragments = append(fragments, loader.AliasFragment{
 			Alias:   fmt.Sprintf("alias_%d", i),
 			Breadth: 120,
 		})
 	}
 
-	requests := collector.Pack(fragments)
+	requests := loader.Pack(fragments)
 	require.Len(t, requests, 2)
 	assert.Equal(t, 480, requests[0].Breadth)
 	assert.Equal(t, 120, requests[1].Breadth)
@@ -168,18 +169,18 @@ func TestPack_SplitsAtBreadthLimit(t *testing.T) {
 
 func TestPack_MixedTypes(t *testing.T) {
 	// Mix metrics (12) and env logs (13): both fit in one request
-	fragments := []collector.AliasFragment{
-		{Alias: "m1", Breadth: collector.BreadthMetrics},
-		{Alias: "l1", Breadth: collector.BreadthEnvironmentLogs},
+	fragments := []loader.AliasFragment{
+		{Alias: "m1", Breadth: loader.BreadthMetrics},
+		{Alias: "l1", Breadth: loader.BreadthEnvironmentLogs},
 	}
 
-	requests := collector.Pack(fragments)
+	requests := loader.Pack(fragments)
 	require.Len(t, requests, 1)
 	assert.Equal(t, 25, requests[0].Breadth)
 }
 
 func TestPack_Empty(t *testing.T) {
-	requests := collector.Pack(nil)
+	requests := loader.Pack(nil)
 	assert.Empty(t, requests)
 }
 
@@ -203,7 +204,7 @@ func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
 
 	f1 := collector.FragmentFromWorkItem(item1, time.Now())
 	f2 := collector.FragmentFromWorkItem(item2, time.Now())
-	req := collector.Request{Fragments: []collector.AliasFragment{f1, f2}, Breadth: f1.Breadth + f2.Breadth}
+	req := loader.Request{Fragments: []loader.AliasFragment{f1, f2}, Breadth: f1.Breadth + f2.Breadth}
 
 	query, vars := req.AssembleQuery()
 
@@ -218,13 +219,13 @@ func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
 }
 
 func TestSortByPriority(t *testing.T) {
-	fragments := []collector.AliasFragment{
+	fragments := []loader.AliasFragment{
 		{Alias: "l1", Item: types.WorkItem{TaskType: types.TaskTypeLogs}},
 		{Alias: "m1", Item: types.WorkItem{TaskType: types.TaskTypeMetrics}},
 		{Alias: "d1", Item: types.WorkItem{TaskType: types.TaskTypeDiscovery}},
 	}
 
-	collector.SortByPriority(fragments)
+	loader.SortByPriority(fragments)
 
 	assert.Equal(t, types.TaskTypeMetrics, fragments[0].Item.TaskType)
 	assert.Equal(t, types.TaskTypeLogs, fragments[1].Item.TaskType)
@@ -245,7 +246,7 @@ type fakeDelivery struct {
 
 func (g *fakeGenerator) Poll(_ time.Time) []types.WorkItem { return nil }
 func (g *fakeGenerator) Type() types.TaskType              { return g.taskType }
-func (g *fakeGenerator) NextPoll() time.Time                   { return time.Time{} }
+func (g *fakeGenerator) NextPoll() time.Time               { return time.Time{} }
 func (g *fakeGenerator) Deliver(_ context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	g.deliveries = append(g.deliveries, fakeDelivery{item: item, data: data, err: err})
 }
@@ -255,8 +256,8 @@ func TestDispatchRequestResults_Success(t *testing.T) {
 	alias := railway.SanitizeAlias("proj-a")
 
 	item := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
-	req := collector.Request{
-		Fragments: []collector.AliasFragment{
+	req := loader.Request{
+		Fragments: []loader.AliasFragment{
 			{Alias: alias, Item: item},
 		},
 	}
@@ -267,8 +268,8 @@ func TestDispatchRequestResults_Success(t *testing.T) {
 		},
 	}
 
-	generatorMap := map[string]collector.TaskGenerator{"m1": gen}
-	collector.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
+	generatorMap := map[string]types.TaskGenerator{"m1": gen}
+	loader.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
 	require.Len(t, gen.deliveries, 1)
 	assert.Nil(t, gen.deliveries[0].err)
@@ -280,15 +281,15 @@ func TestDispatchRequestResults_QueryError(t *testing.T) {
 	item1 := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
 	item2 := types.WorkItem{ID: "m2", Kind: types.QueryMetrics, AliasKey: "proj-b"}
 
-	req := collector.Request{
-		Fragments: []collector.AliasFragment{
+	req := loader.Request{
+		Fragments: []loader.AliasFragment{
 			{Alias: "p_proj_a", Item: item1},
 			{Alias: "p_proj_b", Item: item2},
 		},
 	}
 
-	generatorMap := map[string]collector.TaskGenerator{"m1": gen, "m2": gen}
-	collector.DispatchRequestResults(context.Background(), req, nil, assert.AnError, generatorMap)
+	generatorMap := map[string]types.TaskGenerator{"m1": gen, "m2": gen}
+	loader.DispatchRequestResults(context.Background(), req, nil, assert.AnError, generatorMap)
 
 	require.Len(t, gen.deliveries, 2)
 	assert.ErrorIs(t, gen.deliveries[0].err, assert.AnError)
@@ -300,8 +301,8 @@ func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
 	depAlias := railway.SanitizeAlias("dep-123") + "_build"
 
 	item := types.WorkItem{ID: "b1", Kind: types.QueryBuildLogs, AliasKey: "dep-123"}
-	req := collector.Request{
-		Fragments: []collector.AliasFragment{
+	req := loader.Request{
+		Fragments: []loader.AliasFragment{
 			{Alias: depAlias, Item: item},
 		},
 	}
@@ -312,8 +313,8 @@ func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
 		},
 	}
 
-	generatorMap := map[string]collector.TaskGenerator{"b1": gen}
-	collector.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
+	generatorMap := map[string]types.TaskGenerator{"b1": gen}
+	loader.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
 	require.Len(t, gen.deliveries, 1)
 	assert.Nil(t, gen.deliveries[0].err)
@@ -339,7 +340,7 @@ func TestFragmentFromWorkItem_ServiceMetrics(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_svcmetrics"), "alias should end with _svcmetrics, got %s", f.Alias)
 	assert.Equal(t, "metrics", f.Field)
-	assert.Equal(t, collector.BreadthMetrics, f.Breadth)
+	assert.Equal(t, loader.BreadthMetrics, f.Breadth)
 
 	// serviceId and environmentId are literals (not variables)
 	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
@@ -370,7 +371,7 @@ func TestFragmentFromWorkItem_ReplicaMetrics(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_replica"), "alias should end with _replica, got %s", f.Alias)
 	assert.Equal(t, "replicaMetrics", f.Field)
-	assert.Equal(t, collector.BreadthReplicaMetrics, f.Breadth)
+	assert.Equal(t, loader.BreadthReplicaMetrics, f.Breadth)
 
 	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
 	assert.Contains(t, f.Args, `environmentId: "env-1"`)
@@ -394,7 +395,7 @@ func TestFragmentFromWorkItem_HttpDurationMetrics(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_httpdur"), "alias should end with _httpdur, got %s", f.Alias)
 	assert.Equal(t, "httpDurationMetrics", f.Field)
-	assert.Equal(t, collector.BreadthHttpDurationMetrics, f.Breadth)
+	assert.Equal(t, loader.BreadthHttpDurationMetrics, f.Breadth)
 
 	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
 	assert.Contains(t, f.Args, `environmentId: "env-1"`)
@@ -420,7 +421,7 @@ func TestFragmentFromWorkItem_HttpMetricsGroupedByStatus(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_httpstatus"), "alias should end with _httpstatus, got %s", f.Alias)
 	assert.Equal(t, "httpMetricsGroupedByStatus", f.Field)
-	assert.Equal(t, collector.BreadthHttpMetricsGroupedByStatus, f.Breadth)
+	assert.Equal(t, loader.BreadthHttpMetricsGroupedByStatus, f.Breadth)
 
 	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
 	assert.Contains(t, f.Args, `environmentId: "env-1"`)
@@ -443,7 +444,7 @@ func TestFragmentFromWorkItem_Usage(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_usage"), "alias should end with _usage, got %s", f.Alias)
 	assert.Equal(t, "usage", f.Field)
-	assert.Equal(t, collector.BreadthUsage, f.Breadth)
+	assert.Equal(t, loader.BreadthUsage, f.Breadth)
 
 	assert.Contains(t, f.Args, `projectId: "proj-1"`)
 }
@@ -461,7 +462,7 @@ func TestFragmentFromWorkItem_EstimatedUsage(t *testing.T) {
 
 	assert.True(t, strings.HasSuffix(f.Alias, "_estusage"), "alias should end with _estusage, got %s", f.Alias)
 	assert.Equal(t, "estimatedUsage", f.Field)
-	assert.Equal(t, collector.BreadthEstimatedUsage, f.Breadth)
+	assert.Equal(t, loader.BreadthEstimatedUsage, f.Breadth)
 
 	assert.Contains(t, f.Args, `projectId: "proj-1"`)
 }

@@ -19,8 +19,8 @@ import (
 // BaseMetricsConfig holds configuration fields shared across all metrics
 // generator configs (project, service, replica).
 type BaseMetricsConfig struct {
-	Discovery       TargetProvider
-	Store           StateStore
+	Discovery       types.TargetProvider
+	Store           types.StateStore
 	Sinks           []sink.Sink
 	Clock           clockwork.Clock
 	Measurements    []railway.MetricMeasurement
@@ -35,8 +35,8 @@ type BaseMetricsConfig struct {
 
 // baseMetrics holds runtime fields shared across all metrics generator structs.
 type baseMetrics struct {
-	discovery       TargetProvider
-	store           StateStore
+	discovery       types.TargetProvider
+	store           types.StateStore
 	sinks           []sink.Sink
 	clock           clockwork.Clock
 	measurements    []railway.MetricMeasurement
@@ -211,8 +211,8 @@ type pollEntity struct {
 // generators. The varying behavior is captured by the entities and buildItems
 // callbacks.
 type gapPollParams struct {
-	store           StateStore
-	discovery       TargetProvider
+	store           types.StateStore
+	discovery       types.TargetProvider
 	logger          *slog.Logger
 	metricRetention time.Duration
 	chunkSize       time.Duration
@@ -390,7 +390,7 @@ func ResolveMeasurements(names []string) []railway.MetricMeasurement {
 // updateCoverage loads existing coverage for a key, inserts a new interval, and saves.
 // start must be non-zero; callers should guard with !start.IsZero() before calling.
 // resolution is the sample rate in seconds (0 for logs or when unset).
-func updateCoverage(store StateStore, coverageKey string, start, end time.Time, empty bool, resolution int) error {
+func updateCoverage(store types.StateStore, coverageKey string, start, end time.Time, empty bool, resolution int) error {
 	existing, err := coverage.LoadCoverage(store, coverageKey)
 	if err != nil {
 		return fmt.Errorf("load: %w", err)

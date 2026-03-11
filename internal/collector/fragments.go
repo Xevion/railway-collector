@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/loader"
 	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 )
@@ -124,10 +125,10 @@ func estimateHttpMetricPoints(params map[string]any) int {
 	return int(durationSec) / stepSec
 }
 
-// FragmentFromWorkItem converts a types.WorkItem into a self-contained AliasFragment
+// FragmentFromWorkItem converts a types.WorkItem into a self-contained loader.AliasFragment
 // with fully namespaced variables. The now parameter is used for estimating
 // data points on open-ended queries (no endDate).
-func FragmentFromWorkItem(item types.WorkItem, now time.Time) AliasFragment {
+func FragmentFromWorkItem(item types.WorkItem, now time.Time) loader.AliasFragment {
 	nowFunc := func() time.Time { return now }
 	switch item.Kind {
 	case types.QueryMetrics:
@@ -152,11 +153,11 @@ func FragmentFromWorkItem(item types.WorkItem, now time.Time) AliasFragment {
 		return httpLogsFragment(item)
 	default:
 		// Discovery and unknown types produce empty fragments.
-		return AliasFragment{Item: item}
+		return loader.AliasFragment{Item: item}
 	}
 }
 
-func metricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
+func metricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
@@ -167,20 +168,20 @@ func metricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragmen
 	b.addOptionalVar("sampleRateSeconds", "Int")
 	b.addOptionalVar("averagingWindowSeconds", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:           alias,
 		Field:           "metrics",
 		Args:            b.args(),
 		Selection:       railway.MetricsFieldBody,
 		VarDecls:        b.decls,
 		VarValues:       b.vars,
-		Breadth:         BreadthMetrics,
+		Breadth:         loader.BreadthMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
 	}
 }
 
-func envLogsFragment(item types.WorkItem) AliasFragment {
+func envLogsFragment(item types.WorkItem) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("environmentId", item.AliasKey)
@@ -188,38 +189,38 @@ func envLogsFragment(item types.WorkItem) AliasFragment {
 	b.addOptionalVar("beforeDate", "String")
 	b.addOptionalVar("afterLimit", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:     alias,
 		Field:     "environmentLogs",
 		Args:      b.args(),
 		Selection: railway.EnvironmentLogsFieldBody,
 		VarDecls:  b.decls,
 		VarValues: b.vars,
-		Breadth:   BreadthEnvironmentLogs,
+		Breadth:   loader.BreadthEnvironmentLogs,
 		Item:      item,
 	}
 }
 
-func buildLogsFragment(item types.WorkItem) AliasFragment {
+func buildLogsFragment(item types.WorkItem) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_build"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
 	b.addOptionalVar("limit", "Int")
 	b.addOptionalVar("startDate", "DateTime")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:     alias,
 		Field:     "buildLogs",
 		Args:      b.args(),
 		Selection: railway.BuildLogsFieldBody,
 		VarDecls:  b.decls,
 		VarValues: b.vars,
-		Breadth:   BreadthBuildLogs,
+		Breadth:   loader.BreadthBuildLogs,
 		Item:      item,
 	}
 }
 
-func httpLogsFragment(item types.WorkItem) AliasFragment {
+func httpLogsFragment(item types.WorkItem) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_http"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
@@ -227,19 +228,19 @@ func httpLogsFragment(item types.WorkItem) AliasFragment {
 	// httpLogs uses String type for dates, not DateTime
 	b.addOptionalVar("startDate", "String")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:     alias,
 		Field:     "httpLogs",
 		Args:      b.args(),
 		Selection: railway.HttpLogsFieldBody,
 		VarDecls:  b.decls,
 		VarValues: b.vars,
-		Breadth:   BreadthHttpLogs,
+		Breadth:   loader.BreadthHttpLogs,
 		Item:      item,
 	}
 }
 
-func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
+func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_svcmetrics"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -251,20 +252,20 @@ func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) Alias
 	b.addOptionalVar("sampleRateSeconds", "Int")
 	b.addOptionalVar("averagingWindowSeconds", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:           alias,
 		Field:           "metrics",
 		Args:            b.args(),
 		Selection:       railway.MetricsFieldBody,
 		VarDecls:        b.decls,
 		VarValues:       b.vars,
-		Breadth:         BreadthMetrics,
+		Breadth:         loader.BreadthMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
 	}
 }
 
-func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
+func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) loader.AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_replica"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -275,20 +276,20 @@ func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) Alias
 	b.addOptionalVar("sampleRateSeconds", "Int")
 	b.addOptionalVar("averagingWindowSeconds", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:           alias,
 		Field:           "replicaMetrics",
 		Args:            b.args(),
 		Selection:       railway.ReplicaMetricsFieldBody,
 		VarDecls:        b.decls,
 		VarValues:       b.vars,
-		Breadth:         BreadthReplicaMetrics,
+		Breadth:         loader.BreadthReplicaMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
 	}
 }
 
-func httpDurationMetricsFragment(item types.WorkItem) AliasFragment {
+func httpDurationMetricsFragment(item types.WorkItem) loader.AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpdur"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -297,20 +298,20 @@ func httpDurationMetricsFragment(item types.WorkItem) AliasFragment {
 	b.addVar("endDate", "DateTime!", item.Params["endDate"])
 	b.addOptionalVar("stepSeconds", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:           alias,
 		Field:           "httpDurationMetrics",
 		Args:            b.args(),
 		Selection:       railway.HttpDurationMetricsFieldBody,
 		VarDecls:        b.decls,
 		VarValues:       b.vars,
-		Breadth:         BreadthHttpDurationMetrics,
+		Breadth:         loader.BreadthHttpDurationMetrics,
 		EstimatedPoints: estimateHttpMetricPoints(item.Params),
 		Item:            item,
 	}
 }
 
-func httpStatusMetricsFragment(item types.WorkItem) AliasFragment {
+func httpStatusMetricsFragment(item types.WorkItem) loader.AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpstatus"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -319,20 +320,20 @@ func httpStatusMetricsFragment(item types.WorkItem) AliasFragment {
 	b.addVar("endDate", "DateTime!", item.Params["endDate"])
 	b.addOptionalVar("stepSeconds", "Int")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:           alias,
 		Field:           "httpMetricsGroupedByStatus",
 		Args:            b.args(),
 		Selection:       railway.HttpMetricsGroupedByStatusFieldBody,
 		VarDecls:        b.decls,
 		VarValues:       b.vars,
-		Breadth:         BreadthHttpMetricsGroupedByStatus,
+		Breadth:         loader.BreadthHttpMetricsGroupedByStatus,
 		EstimatedPoints: estimateHttpMetricPoints(item.Params),
 		Item:            item,
 	}
 }
 
-func usageFragment(item types.WorkItem) AliasFragment {
+func usageFragment(item types.WorkItem) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_usage"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
@@ -341,32 +342,32 @@ func usageFragment(item types.WorkItem) AliasFragment {
 	b.addOptionalVar("endDate", "DateTime")
 	b.addOptionalVar("groupBy", "[MetricTag!]")
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:     alias,
 		Field:     "usage",
 		Args:      b.args(),
 		Selection: railway.UsageFieldBody,
 		VarDecls:  b.decls,
 		VarValues: b.vars,
-		Breadth:   BreadthUsage,
+		Breadth:   loader.BreadthUsage,
 		Item:      item,
 	}
 }
 
-func estimatedUsageFragment(item types.WorkItem) AliasFragment {
+func estimatedUsageFragment(item types.WorkItem) loader.AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_estusage"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
 	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
 
-	return AliasFragment{
+	return loader.AliasFragment{
 		Alias:     alias,
 		Field:     "estimatedUsage",
 		Args:      b.args(),
 		Selection: railway.EstimatedUsageFieldBody,
 		VarDecls:  b.decls,
 		VarValues: b.vars,
-		Breadth:   BreadthEstimatedUsage,
+		Breadth:   loader.BreadthEstimatedUsage,
 		Item:      item,
 	}
 }

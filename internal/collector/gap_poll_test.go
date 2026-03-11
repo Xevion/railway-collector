@@ -15,15 +15,15 @@ import (
 	"github.com/xevion/railway-collector/internal/collector/types"
 )
 
-// fakeTargetProvider is a minimal TargetProvider for internal tests.
+// fakeTargetProvider is a minimal types.TargetProvider for internal tests.
 type fakeTargetProvider struct {
 	targets []types.ServiceTarget
 }
 
-func (f *fakeTargetProvider) Targets() []types.ServiceTarget        { return f.targets }
+func (f *fakeTargetProvider) Targets() []types.ServiceTarget  { return f.targets }
 func (f *fakeTargetProvider) Refresh(_ context.Context) error { return nil }
 
-// fakeStateStore is a minimal StateStore for internal tests.
+// fakeStateStore is a minimal types.StateStore for internal tests.
 type fakeStateStore struct {
 	coverage map[string][]byte
 }

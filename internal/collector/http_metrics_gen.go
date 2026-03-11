@@ -42,8 +42,8 @@ type rawHttpStatusSample struct {
 
 // HttpMetricsGeneratorConfig configures an HttpMetricsGenerator.
 type HttpMetricsGeneratorConfig struct {
-	Discovery       TargetProvider
-	Store           StateStore
+	Discovery       types.TargetProvider
+	Store           types.StateStore
 	Sinks           []sink.Sink
 	Clock           clockwork.Clock
 	Interval        time.Duration // minimum time between polls
@@ -59,8 +59,8 @@ type HttpMetricsGeneratorConfig struct {
 // percentiles (httpDurationMetrics) and one for status code counts
 // (httpMetricsGroupedByStatus).
 type HttpMetricsGenerator struct {
-	discovery       TargetProvider
-	store           StateStore
+	discovery       types.TargetProvider
+	store           types.StateStore
 	sinks           []sink.Sink
 	clock           clockwork.Clock
 	interval        time.Duration

@@ -1,4 +1,4 @@
-package collector
+package loader
 
 import (
 	"context"
@@ -156,7 +156,7 @@ func DispatchRequestResults(
 	req Request,
 	resp *railway.RawQueryResponse,
 	queryErr error,
-	generatorMap map[string]TaskGenerator,
+	generatorMap map[string]types.TaskGenerator,
 ) {
 	// Check for request-level errors (empty data with errors = total failure).
 	if queryErr == nil && resp != nil && len(resp.Data) == 0 && len(resp.Errors) > 0 {
@@ -171,7 +171,6 @@ func DispatchRequestResults(
 	if resp != nil {
 		for _, gqlErr := range resp.Errors {
 			if strings.Contains(strings.ToLower(gqlErr.Message), "breadth") {
-				// Log at ERROR -- this means our breadth calculation is wrong
 				slog.Error("breadth limit exceeded (packer bug)",
 					"message", gqlErr.Message,
 					"computed_breadth", req.Breadth,

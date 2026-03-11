@@ -57,8 +57,8 @@ type rawHttpLogEntry struct {
 
 // LogsGeneratorConfig configures a LogsGenerator.
 type LogsGeneratorConfig struct {
-	Discovery       TargetProvider
-	Store           StateStore
+	Discovery       types.TargetProvider
+	Store           types.StateStore
 	Sinks           []sink.Sink
 	Clock           clockwork.Clock
 	Types           []string      // enabled log types: "deployment", "build", "http"
@@ -73,8 +73,8 @@ type LogsGeneratorConfig struct {
 // LogsGenerator implements TaskGenerator for log collection.
 // All log types (environment, build, HTTP) use coverage-driven gap filling.
 type LogsGenerator struct {
-	discovery       TargetProvider
-	store           StateStore
+	discovery       types.TargetProvider
+	store           types.StateStore
 	sinks           []sink.Sink
 	clock           clockwork.Clock
 	types           map[string]bool

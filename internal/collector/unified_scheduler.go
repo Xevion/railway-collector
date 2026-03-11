@@ -13,15 +13,16 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/xevion/railway-collector/internal/collector/credit"
+	"github.com/xevion/railway-collector/internal/collector/loader"
 	"github.com/xevion/railway-collector/internal/collector/types"
 )
 
 // UnifiedSchedulerConfig configures the unified credit-based scheduler.
 type UnifiedSchedulerConfig struct {
 	Clock      clockwork.Clock
-	API        RailwayAPI
+	API        types.RailwayAPI
 	Credits    *credit.CreditAllocator
-	Generators []TaskGenerator
+	Generators []types.TaskGenerator
 	Logger     *slog.Logger
 
 	// TickInterval controls how often the scheduler polls generators for work.
@@ -46,7 +47,7 @@ type UnifiedScheduler struct {
 	limiter *rate.Limiter
 
 	// generatorsByType provides quick lookup of generators by their TaskType.
-	generatorsByType map[types.TaskType]TaskGenerator
+	generatorsByType map[types.TaskType]types.TaskGenerator
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -67,7 +68,7 @@ func NewUnifiedScheduler(cfg UnifiedSchedulerConfig) *UnifiedScheduler {
 		cfg.DrainTimeout = 5 * time.Second
 	}
 
-	genByType := make(map[types.TaskType]TaskGenerator, len(cfg.Generators))
+	genByType := make(map[types.TaskType]types.TaskGenerator, len(cfg.Generators))
 	for _, g := range cfg.Generators {
 		genByType[g.Type()] = g
 	}
@@ -117,7 +118,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	// 1. Poll all generators for pending work.
 	var allItems []types.WorkItem
 	// Track which generator produced each item for result delivery.
-	generatorMap := make(map[string]TaskGenerator)
+	generatorMap := make(map[string]types.TaskGenerator)
 
 	for _, gen := range s.cfg.Generators {
 		items := gen.Poll(now)
@@ -167,15 +168,15 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	// 3. Convert work items to self-contained alias fragments.
-	var fragments []AliasFragment
+	var fragments []loader.AliasFragment
 	for _, item := range queryItems {
 		fragments = append(fragments, FragmentFromWorkItem(item, now))
 	}
-	SortByPriority(fragments)
+	loader.SortByPriority(fragments)
 
 	// 4. Try credit deduction. Walk fragments by priority, deduct credits for
 	//    each task type encountered, and collect credited fragments.
-	var credited []AliasFragment
+	var credited []loader.AliasFragment
 	deducted := make(map[types.TaskType]bool)
 	var skippedTypes []string
 	for _, f := range fragments {
@@ -205,7 +206,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	// 5. Pack credited fragments into requests (breadth budget).
-	requests := Pack(credited)
+	requests := loader.Pack(credited)
 
 	if len(requests) > 0 {
 		s.cfg.Logger.Debug("packed fragments into requests",
@@ -267,7 +268,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 			continue
 		}
 
-		DispatchRequestResults(ctx, req, resp, queryErr, generatorMap)
+		loader.DispatchRequestResults(ctx, req, resp, queryErr, generatorMap)
 	}
 
 	// 7. Handle discovery if credited (piggyback on same tick after the queries).
@@ -284,7 +285,7 @@ type refresher interface {
 
 // handleDiscoveryItems executes discovery refresh via the generator's
 // Refresh method rather than building a raw query.
-func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []types.WorkItem, generatorMap map[string]TaskGenerator) {
+func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []types.WorkItem, generatorMap map[string]types.TaskGenerator) {
 	gen, ok := s.generatorsByType[types.TaskTypeDiscovery]
 	if !ok {
 		s.cfg.Logger.Error("discovery generator not found")
@@ -307,7 +308,7 @@ func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []typ
 
 // retryFragmentsIndividually retries each fragment as a solo request after a batch
 // computation limit error. This isolates which alias caused the failure.
-func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragments []AliasFragment, generatorMap map[string]TaskGenerator) {
+func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragments []loader.AliasFragment, generatorMap map[string]types.TaskGenerator) {
 	for _, frag := range fragments {
 		if ctx.Err() != nil {
 			return
@@ -320,8 +321,8 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 			return
 		}
 
-		soloReq := Request{
-			Fragments: []AliasFragment{frag},
+		soloReq := loader.Request{
+			Fragments: []loader.AliasFragment{frag},
 			Breadth:   frag.Breadth,
 		}
 
@@ -346,13 +347,13 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 			)
 		}
 
-		DispatchRequestResults(ctx, soloReq, resp, queryErr, generatorMap)
+		loader.DispatchRequestResults(ctx, soloReq, resp, queryErr, generatorMap)
 	}
 }
 
 // kindBreakdown returns a summary string of fragment counts by QueryKind,
 // e.g. "metrics:10 replicaMetrics:5 httpDurationMetrics:5".
-func kindBreakdown(fragments []AliasFragment) string {
+func kindBreakdown(fragments []loader.AliasFragment) string {
 	counts := make(map[types.QueryKind]int)
 	for _, f := range fragments {
 		counts[f.Item.Kind]++

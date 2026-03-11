@@ -38,7 +38,7 @@ type rawEstimatedUsageResult struct {
 
 // UsageGeneratorConfig configures a UsageGenerator.
 type UsageGeneratorConfig struct {
-	Discovery    TargetProvider
+	Discovery    types.TargetProvider
 	Sinks        []sink.Sink
 	Clock        clockwork.Clock
 	Measurements []railway.MetricMeasurement
@@ -50,7 +50,7 @@ type UsageGeneratorConfig struct {
 // It collects current-state snapshots at a low cadence (default: hourly),
 // emitting usage and estimated-usage WorkItems per project.
 type UsageGenerator struct {
-	discovery    TargetProvider
+	discovery    types.TargetProvider
 	sinks        []sink.Sink
 	clock        clockwork.Clock
 	measurements []railway.MetricMeasurement

@@ -17,6 +17,7 @@ import (
 
 	"github.com/xevion/railway-collector/internal/collector"
 	"github.com/xevion/railway-collector/internal/collector/credit"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
@@ -162,7 +163,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	credits := credit.NewCreditAllocator(cfg.Collect.Credits, now, logger)
 
 	// Build generators
-	var generators []collector.TaskGenerator
+	var generators []types.TaskGenerator
 
 	if cfg.Collect.Metrics.Enabled {
 		generators = append(generators, collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
