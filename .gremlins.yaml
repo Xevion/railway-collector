@@ -1,0 +1,19 @@
+unleash:
+  exclude-files:
+    - "internal/railway/generated\\.go$"
+    - "internal/collector/mocks/.*\\.go$"
+  timeout-coefficient: 10
+
+mutants:
+  invert-logical:
+    enabled: true
+  invert-loopctrl:
+    enabled: true
+  invert-assignments:
+    enabled: true
+  invert-bitwise:
+    enabled: true
+  invert-bwassign:
+    enabled: true
+  remove-self-assignments:
+    enabled: true

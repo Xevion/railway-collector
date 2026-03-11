@@ -30,6 +30,14 @@ test *ARGS:
 mocks:
     go generate ./internal/collector/...
 
+# Run mutation testing
+mutate *ARGS:
+    gremlins unleash {{ARGS}}
+
+# Dry-run mutation testing (find mutants without running tests)
+mutate-dry *ARGS:
+    gremlins unleash --dry-run {{ARGS}}
+
 # Remove build artifacts
 clean:
     rm -f collector
