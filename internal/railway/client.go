@@ -374,41 +374,6 @@ func (c *Client) DiscoverAll(ctx context.Context, workspaceID *string, isEphemer
 	})
 }
 
-// GetMetrics returns time-series metrics.
-func (c *Client) GetMetrics(ctx context.Context, projectID, serviceID, envID *string, startDate string, endDate *string, measurements []MetricMeasurement, groupBy []MetricTag, sampleRate, avgWindow *int) (*MetricsResponse, error) {
-	return do(c, ctx, "GetMetrics", func() (*MetricsResponse, error) {
-		return Metrics(ctx, c.gql, projectID, serviceID, envID, startDate, endDate, measurements, groupBy, sampleRate, avgWindow)
-	})
-}
-
-// GetDeploymentLogs returns runtime logs for a deployment.
-func (c *Client) GetDeploymentLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*DeploymentLogsQueryResponse, error) {
-	return do(c, ctx, "GetDeploymentLogs", func() (*DeploymentLogsQueryResponse, error) {
-		return DeploymentLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	})
-}
-
-// GetBuildLogs returns build logs for a deployment.
-func (c *Client) GetBuildLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*BuildLogsQueryResponse, error) {
-	return do(c, ctx, "GetBuildLogs", func() (*BuildLogsQueryResponse, error) {
-		return BuildLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	})
-}
-
-// GetHttpLogs returns HTTP access logs for a deployment.
-func (c *Client) GetHttpLogs(ctx context.Context, deploymentID string, limit *int, startDate, endDate, filter *string) (*HttpLogsQueryResponse, error) {
-	return do(c, ctx, "GetHttpLogs", func() (*HttpLogsQueryResponse, error) {
-		return HttpLogsQuery(ctx, c.gql, deploymentID, limit, startDate, endDate, filter)
-	})
-}
-
-// GetEnvironmentLogs returns runtime logs for an entire environment (all services).
-func (c *Client) GetEnvironmentLogs(ctx context.Context, environmentID string, filter *string, afterDate, beforeDate *string, afterLimit, beforeLimit *int, anchorDate *string) (*EnvironmentLogsQueryResponse, error) {
-	return do(c, ctx, "GetEnvironmentLogs", func() (*EnvironmentLogsQueryResponse, error) {
-		return EnvironmentLogsQuery(ctx, c.gql, environmentID, filter, afterDate, beforeDate, afterLimit, beforeLimit, anchorDate)
-	})
-}
-
 // RawQueryResponse holds the parsed result of a raw GraphQL query.
 // Data contains per-alias results keyed by alias name.
 // Errors contains any GraphQL-level errors from the response.

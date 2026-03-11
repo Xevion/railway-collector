@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -60,7 +61,7 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 			intervals []collector.CoverageInterval
 		}
 		for _, e := range entries {
-			if e.Key != cmd.Project && !hasPrefix(e.Key, cmd.Project+":") {
+			if e.Key != cmd.Project && !strings.HasPrefix(e.Key, cmd.Project+":") {
 				continue
 			}
 			var intervals []collector.CoverageInterval
@@ -260,25 +261,4 @@ func coverageKindStr(k collector.CoverageKind) string {
 	default:
 		return fmt.Sprintf("unknown(%d)", k)
 	}
-}
-
-// computeGaps finds uncovered time between sorted intervals.
-func computeGaps(intervals []collector.CoverageInterval) []collector.TimeRange {
-	if len(intervals) < 2 {
-		return nil
-	}
-	var gaps []collector.TimeRange
-	for i := 1; i < len(intervals); i++ {
-		if intervals[i].Start.After(intervals[i-1].End) {
-			gaps = append(gaps, collector.TimeRange{
-				Start: intervals[i-1].End,
-				End:   intervals[i].Start,
-			})
-		}
-	}
-	return gaps
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
