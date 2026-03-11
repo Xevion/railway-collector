@@ -3,9 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
-
-	"github.com/dustin/go-humanize"
 
 	"github.com/xevion/railway-collector/internal/cli"
 	"github.com/xevion/railway-collector/internal/collector"
@@ -19,11 +18,13 @@ type CoverageCmd struct {
 }
 
 type coverageSummaryJSON struct {
-	Key       string `json:"key"`
-	Collected string `json:"collected"`
-	Empty     string `json:"empty"`
-	Gaps      int    `json:"gaps"`
-	Largest   string `json:"largest_gap"`
+	Key        string `json:"key"`
+	Collected  string `json:"collected"`
+	Empty      string `json:"empty"`
+	Gaps       string `json:"gaps"`
+	GapCount   int    `json:"gap_count"`
+	LargestGap string `json:"largest_gap"`
+	Coverage   string `json:"coverage"`
 }
 
 type coverageIntervalJSON struct {
@@ -117,84 +118,53 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 		return nil
 	}
 
-	// Summary mode
-	type summary struct {
-		key       string
-		collected time.Duration
-		empty     time.Duration
-		gaps      int
-		largest   time.Duration
-	}
-
-	var summaries []summary
-	for _, e := range entries {
-		var intervals []collector.CoverageInterval
-		if err := json.Unmarshal(e.Value, &intervals); err != nil {
-			continue
-		}
-
-		var s summary
-		s.key = e.Key
-		for _, iv := range intervals {
-			dur := iv.End.Sub(iv.Start)
-			switch iv.Kind {
-			case collector.CoverageCollected:
-				s.collected += dur
-			case collector.CoverageEmpty:
-				s.empty += dur
-			}
-		}
-
-		// Count gaps (uncovered time between intervals)
-		gaps := computeGaps(intervals)
-		s.gaps = len(gaps)
-		for _, g := range gaps {
-			if d := g.End.Sub(g.Start); d > s.largest {
-				s.largest = d
-			}
-		}
-
-		summaries = append(summaries, s)
-	}
-
 	if cmd.Intervals {
 		return cmd.renderIntervals(c, f, entries)
 	}
 
+	// Summary mode: window is now minus retention (90 days) to now
+	now := time.Now()
+	windowStart := now.Add(-90 * 24 * time.Hour)
+
+	// Build name resolver from discovery cache
+	resolver := buildNameResolver(reader)
+	summaries := buildCoverageSummaries(entries, windowStart, now, resolver)
+
 	if c.JSON {
 		var jsonOut []coverageSummaryJSON
 		for _, s := range summaries {
-			largest := "-"
-			if s.largest > 0 {
-				largest = s.largest.Round(time.Second).String()
+			largestGapStr := "0s"
+			if s.LargestGap > 0 {
+				largestGapStr = s.LargestGap.Round(time.Second).String()
 			}
 			jsonOut = append(jsonOut, coverageSummaryJSON{
-				Key:       s.key,
-				Collected: s.collected.Round(time.Second).String(),
-				Empty:     s.empty.Round(time.Second).String(),
-				Gaps:      s.gaps,
-				Largest:   largest,
+				Key:        s.Key,
+				Collected:  s.Collected.Round(time.Second).String(),
+				Empty:      s.Empty.Round(time.Second).String(),
+				Gaps:       s.Gaps.Round(time.Second).String(),
+				GapCount:   s.GapCount,
+				LargestGap: largestGapStr,
+				Coverage:   fmt.Sprintf("%.1f%%", s.Percentage),
 			})
 		}
 		return f.WriteJSON(jsonOut)
 	}
 
-	headers := []string{"Key", "Collected", "Empty", "Gaps", "Largest Gap"}
-	var rows [][]string
+	tb := cli.NewTreeBuilder()
 	for _, s := range summaries {
-		largest := "-"
-		if s.largest > 0 {
-			largest = humanize.RelTime(time.Now().Add(-s.largest), time.Now(), "", "")
-		}
-		rows = append(rows, []string{
-			s.key,
-			s.collected.Round(time.Second).String(),
-			s.empty.Round(time.Second).String(),
-			fmt.Sprintf("%d", s.gaps),
-			largest,
+		path := parseCoverageSegments(s.Key)
+		tb.Add(path, &cli.NodeStats{
+			Coverage:   s.Percentage,
+			GapCount:   s.GapCount,
+			LargestGap: s.LargestGap,
+			Collected:  s.Collected,
+			Total:      s.Collected + s.Empty + s.Gaps,
 		})
 	}
-	f.WriteTable(headers, rows)
+	tree := tb.Build()
+	title := fmt.Sprintf("Coverage Report - %d streams, %s window",
+		len(summaries), cli.FormatDuration(now.Sub(windowStart)))
+	cli.RenderTree(os.Stdout, tree, title)
 	return nil
 }
 
