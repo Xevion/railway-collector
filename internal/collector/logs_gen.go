@@ -9,6 +9,8 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/sink"
 )
@@ -117,9 +119,9 @@ func NewLogsGenerator(cfg LogsGeneratorConfig) *LogsGenerator {
 	}
 }
 
-// Type returns TaskTypeLogs.
-func (g *LogsGenerator) Type() TaskType {
-	return TaskTypeLogs
+// Type returns types.TaskTypeLogs.
+func (g *LogsGenerator) Type() types.TaskType {
+	return types.TaskTypeLogs
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -127,7 +129,7 @@ func (g *LogsGenerator) NextPoll() time.Time { return g.nextPoll }
 
 // Poll returns WorkItems for each log type that needs fetching.
 // All log types use coverage-driven gap filling.
-func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
+func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 	if now.Before(g.nextPoll) {
 		return nil
 	}
@@ -137,7 +139,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 		return nil
 	}
 
-	var items []WorkItem
+	var items []types.WorkItem
 	itemCount := 0
 
 	// Environment logs: coverage-driven gap filling per unique environment
@@ -150,15 +152,15 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 			}
 			seen[t.EnvironmentID] = true
 
-			coverageKey := CoverageKey(t.EnvironmentID, CoverageTypeLogEnv)
-			existing, err := LoadCoverage(g.store, coverageKey)
+			coverageKey := coverage.CoverageKey(t.EnvironmentID, coverage.CoverageTypeLogEnv)
+			existing, err := coverage.LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load env log coverage",
 					"environment_id", t.EnvironmentID, "error", err)
 				continue
 			}
 
-			gaps := FindGaps(existing, retentionStart, now)
+			gaps := coverage.FindGaps(existing, retentionStart, now)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -174,7 +176,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
 			)
 
-			prioritized := PrioritizeGaps(gaps, now)
+			prioritized := coverage.PrioritizeGaps(gaps, now)
 
 			for _, gap := range prioritized {
 				if itemCount >= g.maxItemsPerPoll {
@@ -188,16 +190,16 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 					// portion into fixed chunks and only keep the tail as live edge.
 					gapDuration := gap.End.Sub(gap.Start)
 					if gapDuration > g.chunkSize {
-						olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
+						olderGap := coverage.TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
 						chunks := alignedChunks(olderGap, g.chunkSize)
 						for _, chunk := range chunks {
 							if itemCount >= g.maxItemsPerPoll {
 								break
 							}
-							items = append(items, WorkItem{
+							items = append(items, types.WorkItem{
 								ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-								Kind:     QueryEnvironmentLogs,
-								TaskType: TaskTypeLogs,
+								Kind:     types.QueryEnvironmentLogs,
+								TaskType: types.TaskTypeLogs,
 								AliasKey: t.EnvironmentID,
 								BatchKey: fmt.Sprintf("limit=%d,s=%s,e=%s",
 									g.limit, chunk.Start.Format(time.RFC3339), chunk.End.Format(time.RFC3339)),
@@ -209,7 +211,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 							})
 							itemCount++
 						}
-						gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
+						gap = coverage.TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
 					}
 
 					if itemCount >= g.maxItemsPerPoll {
@@ -221,10 +223,10 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 						"afterLimit": g.limit,
 						"afterDate":  gap.Start.Format(time.RFC3339Nano),
 					}
-					items = append(items, WorkItem{
+					items = append(items, types.WorkItem{
 						ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, gap.Start.Format(time.RFC3339)),
-						Kind:     QueryEnvironmentLogs,
-						TaskType: TaskTypeLogs,
+						Kind:     types.QueryEnvironmentLogs,
+						TaskType: types.TaskTypeLogs,
 						AliasKey: t.EnvironmentID,
 						BatchKey: fmt.Sprintf("limit=%d", g.limit),
 						Params:   params,
@@ -237,10 +239,10 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 						if itemCount >= g.maxItemsPerPoll {
 							break
 						}
-						items = append(items, WorkItem{
+						items = append(items, types.WorkItem{
 							ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryEnvironmentLogs,
-							TaskType: TaskTypeLogs,
+							Kind:     types.QueryEnvironmentLogs,
+							TaskType: types.TaskTypeLogs,
 							AliasKey: t.EnvironmentID,
 							BatchKey: fmt.Sprintf("limit=%d,s=%s,e=%s",
 								g.limit, chunk.Start.Format(time.RFC3339), chunk.End.Format(time.RFC3339)),
@@ -265,15 +267,15 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				continue
 			}
 
-			coverageKey := CoverageKey(t.DeploymentID, CoverageTypeLogBuild)
-			existing, err := LoadCoverage(g.store, coverageKey)
+			coverageKey := coverage.CoverageKey(t.DeploymentID, coverage.CoverageTypeLogBuild)
+			existing, err := coverage.LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load build log coverage",
 					"deployment_id", t.DeploymentID, "error", err)
 				continue
 			}
 
-			gaps := FindGaps(existing, retentionStart, now)
+			gaps := coverage.FindGaps(existing, retentionStart, now)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -289,15 +291,15 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
 			)
 
-			prioritized := PrioritizeGaps(gaps, now)
+			prioritized := coverage.PrioritizeGaps(gaps, now)
 			for _, gap := range prioritized {
 				if itemCount >= g.maxItemsPerPoll {
 					break
 				}
-				items = append(items, WorkItem{
+				items = append(items, types.WorkItem{
 					ID:       fmt.Sprintf("buildlogs:%s:%s", t.DeploymentID, gap.Start.Format(time.RFC3339)),
-					Kind:     QueryBuildLogs,
-					TaskType: TaskTypeLogs,
+					Kind:     types.QueryBuildLogs,
+					TaskType: types.TaskTypeLogs,
 					AliasKey: t.DeploymentID,
 					BatchKey: fmt.Sprintf("limit=%d", g.limit),
 					Params: map[string]any{
@@ -318,15 +320,15 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				continue
 			}
 
-			coverageKey := CoverageKey(t.DeploymentID, CoverageTypeLogHTTP)
-			existing, err := LoadCoverage(g.store, coverageKey)
+			coverageKey := coverage.CoverageKey(t.DeploymentID, coverage.CoverageTypeLogHTTP)
+			existing, err := coverage.LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load HTTP log coverage",
 					"deployment_id", t.DeploymentID, "error", err)
 				continue
 			}
 
-			gaps := FindGaps(existing, retentionStart, now)
+			gaps := coverage.FindGaps(existing, retentionStart, now)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -342,15 +344,15 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
 			)
 
-			prioritized := PrioritizeGaps(gaps, now)
+			prioritized := coverage.PrioritizeGaps(gaps, now)
 			for _, gap := range prioritized {
 				if itemCount >= g.maxItemsPerPoll {
 					break
 				}
-				items = append(items, WorkItem{
+				items = append(items, types.WorkItem{
 					ID:       fmt.Sprintf("httplogs:%s:%s", t.DeploymentID, gap.Start.Format(time.RFC3339)),
-					Kind:     QueryHttpLogs,
-					TaskType: TaskTypeLogs,
+					Kind:     types.QueryHttpLogs,
+					TaskType: types.TaskTypeLogs,
 					AliasKey: t.DeploymentID,
 					BatchKey: fmt.Sprintf("limit=%d", g.limit),
 					Params: map[string]any{
@@ -371,8 +373,8 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 }
 
 // Deliver processes raw log JSON for a single alias.
-// Routes to the appropriate handler based on the WorkItem's Kind.
-func (g *LogsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+// Routes to the appropriate handler based on the types.WorkItem's Kind.
+func (g *LogsGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	if err != nil {
 		g.logger.Error("log delivery failed",
 			"kind", item.Kind, "alias_key", item.AliasKey, "error", err)
@@ -380,18 +382,18 @@ func (g *LogsGenerator) Deliver(ctx context.Context, item WorkItem, data json.Ra
 	}
 
 	switch item.Kind {
-	case QueryEnvironmentLogs:
+	case types.QueryEnvironmentLogs:
 		g.deliverEnvironmentLogs(ctx, item, data)
-	case QueryBuildLogs:
+	case types.QueryBuildLogs:
 		g.deliverBuildLogs(ctx, item, data)
-	case QueryHttpLogs:
+	case types.QueryHttpLogs:
 		g.deliverHttpLogs(ctx, item, data)
 	default:
 		g.logger.Error("unknown log work item kind", "kind", item.Kind)
 	}
 }
 
-func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
+func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item types.WorkItem, data json.RawMessage) {
 	envID := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
@@ -495,7 +497,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	}
 
 	if !covStart.IsZero() {
-		covKey := CoverageKey(envID, CoverageTypeLogEnv)
+		covKey := coverage.CoverageKey(envID, coverage.CoverageTypeLogEnv)
 		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update log coverage",
 				"environment", envName, "environment_id", envID, "error", covErr)
@@ -510,7 +512,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
 
-func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
+func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item types.WorkItem, data json.RawMessage) {
 	deploymentID := item.AliasKey
 	baseLabels := deploymentBaseLabels(deploymentID, g.discovery.Targets())
 
@@ -572,7 +574,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 	}
 
 	if !covStart.IsZero() {
-		covKey := CoverageKey(deploymentID, CoverageTypeLogBuild)
+		covKey := coverage.CoverageKey(deploymentID, coverage.CoverageTypeLogBuild)
 		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update build log coverage",
 				"deployment_id", deploymentID, "error", covErr)
@@ -586,7 +588,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
 
-func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
+func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item types.WorkItem, data json.RawMessage) {
 	deploymentID := item.AliasKey
 	baseLabels := deploymentBaseLabels(deploymentID, g.discovery.Targets())
 
@@ -662,7 +664,7 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 	}
 
 	if !covStart.IsZero() {
-		covKey := CoverageKey(deploymentID, CoverageTypeLogHTTP)
+		covKey := coverage.CoverageKey(deploymentID, coverage.CoverageTypeLogHTTP)
 		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update HTTP log coverage",
 				"deployment_id", deploymentID, "error", covErr)

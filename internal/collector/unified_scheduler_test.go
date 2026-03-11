@@ -14,7 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/credit"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 	"go.uber.org/mock/gomock"
 )
@@ -22,21 +24,21 @@ import (
 // stubGenerator implements TaskGenerator with configurable behavior for testing.
 type stubGenerator struct {
 	mu         sync.Mutex
-	taskType   collector.TaskType
-	pollItems  []collector.WorkItem
+	taskType   types.TaskType
+	pollItems  []types.WorkItem
 	deliveries []stubDelivery
 	pollCount  atomic.Int32
 }
 
 type stubDelivery struct {
-	Item collector.WorkItem
+	Item types.WorkItem
 	Data json.RawMessage
 	Err  error
 }
 
-func (g *stubGenerator) Type() collector.TaskType { return g.taskType }
+func (g *stubGenerator) Type() types.TaskType { return g.taskType }
 
-func (g *stubGenerator) Poll(_ time.Time) []collector.WorkItem {
+func (g *stubGenerator) Poll(_ time.Time) []types.WorkItem {
 	g.pollCount.Add(1)
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -47,7 +49,7 @@ func (g *stubGenerator) Poll(_ time.Time) []collector.WorkItem {
 
 func (g *stubGenerator) NextPoll() time.Time { return time.Time{} }
 
-func (g *stubGenerator) Deliver(_ context.Context, item collector.WorkItem, data json.RawMessage, err error) {
+func (g *stubGenerator) Deliver(_ context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.deliveries = append(g.deliveries, stubDelivery{Item: item, Data: data, Err: err})
@@ -83,11 +85,11 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	gen := &stubGenerator{
-		taskType: collector.TaskTypeMetrics,
-		pollItems: []collector.WorkItem{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
 			{
-				ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+				ID: "metrics:proj-a", Kind: types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
@@ -98,8 +100,8 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 				},
 			},
 			{
-				ID: "metrics:proj-b", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeMetrics, AliasKey: "proj-b",
+				ID: "metrics:proj-b", Kind: types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "proj-b",
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-02T00:00:00Z",
@@ -127,7 +129,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -163,11 +165,11 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	gen := &stubGenerator{
-		taskType: collector.TaskTypeMetrics,
-		pollItems: []collector.WorkItem{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
 			{
-				ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+				ID: "metrics:proj-a", Kind: types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
@@ -181,12 +183,12 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 	}
 
 	// Create allocator with exhausted credits.
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 	credits.UpdateRegime(0, 1000, 3600) // exhausted regime, zeroes all rates
 
 	// Drain any initial credit.
-	credits.TryDeduct(collector.TaskTypeMetrics, fakeClock.Now())
-	credits.TryDeduct(collector.TaskTypeMetrics, fakeClock.Now())
+	credits.TryDeduct(types.TaskTypeMetrics, fakeClock.Now())
+	credits.TryDeduct(types.TaskTypeMetrics, fakeClock.Now())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -221,7 +223,7 @@ func TestUnifiedScheduler_DiscoverySpecialCase(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	disc.EXPECT().Refresh(gomock.Any()).Return(nil).Times(1)
-	disc.EXPECT().Targets().Return([]collector.ServiceTarget{}).AnyTimes()
+	disc.EXPECT().Targets().Return([]types.ServiceTarget{}).AnyTimes()
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
@@ -231,7 +233,7 @@ func TestUnifiedScheduler_DiscoverySpecialCase(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -262,11 +264,11 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	metricsGen := &stubGenerator{
-		taskType: collector.TaskTypeMetrics,
-		pollItems: []collector.WorkItem{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
 			{
-				ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+				ID: "metrics:proj-a", Kind: types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
@@ -280,11 +282,11 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 	}
 
 	logsGen := &stubGenerator{
-		taskType: collector.TaskTypeLogs,
-		pollItems: []collector.WorkItem{
+		taskType: types.TaskTypeLogs,
+		pollItems: []types.WorkItem{
 			{
-				ID: "envlogs:env-a", Kind: collector.QueryEnvironmentLogs,
-				TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+				ID: "envlogs:env-a", Kind: types.QueryEnvironmentLogs,
+				TaskType: types.TaskTypeLogs, AliasKey: "env-a",
 				BatchKey: "limit=500",
 				Params: map[string]any{
 					"afterDate":  "2024-01-01T00:00:00Z",
@@ -310,7 +312,7 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -348,7 +350,7 @@ func TestUnifiedScheduler_StopCancelsLoop(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:      fakeClock,
@@ -384,7 +386,7 @@ func TestUnifiedScheduler_ContextCancelReturnsError(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:      fakeClock,
@@ -417,11 +419,11 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	gen := &stubGenerator{
-		taskType: collector.TaskTypeMetrics,
-		pollItems: []collector.WorkItem{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
 			{
-				ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+				ID: "metrics:proj-a", Kind: types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
@@ -446,7 +448,7 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	// remaining=5 out of estimated 1000 = 0.5% -> Scarce.
 	api.EXPECT().RateLimitInfo().Return(5, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -469,7 +471,7 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	// Wait for delivery (confirms the tick executed).
 	gen.waitForDeliveries(t, 1, 2*time.Second)
 
-	assert.Equal(t, collector.RegimeScarce, credits.Regime())
+	assert.Equal(t, credit.RegimeScarce, credits.Regime())
 
 	cancel()
 }

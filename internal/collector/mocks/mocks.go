@@ -15,7 +15,7 @@ import (
 	reflect "reflect"
 	time "time"
 
-	collector "github.com/xevion/railway-collector/internal/collector"
+	types "github.com/xevion/railway-collector/internal/collector/types"
 	railway "github.com/xevion/railway-collector/internal/railway"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -158,17 +158,17 @@ func (mr *MockStateStoreMockRecorder) Close() *gomock.Call {
 }
 
 // DeleteDiscoveryCache mocks base method.
-func (m *MockStateStore) DeleteDiscoveryCache(projectID string) error {
+func (m *MockStateStore) DeleteDiscoveryCache(key string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteDiscoveryCache", projectID)
+	ret := m.ctrl.Call(m, "DeleteDiscoveryCache", key)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteDiscoveryCache indicates an expected call of DeleteDiscoveryCache.
-func (mr *MockStateStoreMockRecorder) DeleteDiscoveryCache(projectID any) *gomock.Call {
+func (mr *MockStateStoreMockRecorder) DeleteDiscoveryCache(key any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).DeleteDiscoveryCache), projectID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).DeleteDiscoveryCache), key)
 }
 
 // GetCoverage mocks base method.
@@ -187,18 +187,18 @@ func (mr *MockStateStoreMockRecorder) GetCoverage(key any) *gomock.Call {
 }
 
 // GetDiscoveryCache mocks base method.
-func (m *MockStateStore) GetDiscoveryCache(projectID string) ([]byte, error) {
+func (m *MockStateStore) GetDiscoveryCache(key string) ([]byte, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDiscoveryCache", projectID)
+	ret := m.ctrl.Call(m, "GetDiscoveryCache", key)
 	ret0, _ := ret[0].([]byte)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetDiscoveryCache indicates an expected call of GetDiscoveryCache.
-func (mr *MockStateStoreMockRecorder) GetDiscoveryCache(projectID any) *gomock.Call {
+func (mr *MockStateStoreMockRecorder) GetDiscoveryCache(key any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).GetDiscoveryCache), projectID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).GetDiscoveryCache), key)
 }
 
 // ListCoverage mocks base method.
@@ -246,17 +246,17 @@ func (mr *MockStateStoreMockRecorder) SetCoverage(key, data any) *gomock.Call {
 }
 
 // SetDiscoveryCache mocks base method.
-func (m *MockStateStore) SetDiscoveryCache(projectID string, data []byte) error {
+func (m *MockStateStore) SetDiscoveryCache(key string, data []byte) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetDiscoveryCache", projectID, data)
+	ret := m.ctrl.Call(m, "SetDiscoveryCache", key, data)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetDiscoveryCache indicates an expected call of SetDiscoveryCache.
-func (mr *MockStateStoreMockRecorder) SetDiscoveryCache(projectID, data any) *gomock.Call {
+func (mr *MockStateStoreMockRecorder) SetDiscoveryCache(key, data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).SetDiscoveryCache), projectID, data)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).SetDiscoveryCache), key, data)
 }
 
 // MockTargetProvider is a mock of TargetProvider interface.
@@ -298,10 +298,10 @@ func (mr *MockTargetProviderMockRecorder) Refresh(ctx any) *gomock.Call {
 }
 
 // Targets mocks base method.
-func (m *MockTargetProvider) Targets() []collector.ServiceTarget {
+func (m *MockTargetProvider) Targets() []types.ServiceTarget {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Targets")
-	ret0, _ := ret[0].([]collector.ServiceTarget)
+	ret0, _ := ret[0].([]types.ServiceTarget)
 	return ret0
 }
 
@@ -336,7 +336,7 @@ func (m *MockTaskGenerator) EXPECT() *MockTaskGeneratorMockRecorder {
 }
 
 // Deliver mocks base method.
-func (m *MockTaskGenerator) Deliver(ctx context.Context, item collector.WorkItem, data json.RawMessage, err error) {
+func (m *MockTaskGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "Deliver", ctx, item, data, err)
 }
@@ -362,10 +362,10 @@ func (mr *MockTaskGeneratorMockRecorder) NextPoll() *gomock.Call {
 }
 
 // Poll mocks base method.
-func (m *MockTaskGenerator) Poll(now time.Time) []collector.WorkItem {
+func (m *MockTaskGenerator) Poll(now time.Time) []types.WorkItem {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Poll", now)
-	ret0, _ := ret[0].([]collector.WorkItem)
+	ret0, _ := ret[0].([]types.WorkItem)
 	return ret0
 }
 
@@ -376,10 +376,10 @@ func (mr *MockTaskGeneratorMockRecorder) Poll(now any) *gomock.Call {
 }
 
 // Type mocks base method.
-func (m *MockTaskGenerator) Type() collector.TaskType {
+func (m *MockTaskGenerator) Type() types.TaskType {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Type")
-	ret0, _ := ret[0].(collector.TaskType)
+	ret0, _ := ret[0].(types.TaskType)
 	return ret0
 }
 

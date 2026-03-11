@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -23,7 +24,7 @@ func TestProjectMetricsGenerator_Type(t *testing.T) {
 			Logger: slog.Default(),
 		},
 	})
-	assert.Equal(t, collector.TaskTypeMetrics, gen.Type())
+	assert.Equal(t, types.TaskTypeMetrics, gen.Type())
 }
 
 func TestProjectMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
@@ -34,7 +35,7 @@ func TestProjectMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		{ProjectID: "proj-2", ProjectName: "two", ServiceID: "svc-2", EnvironmentID: "env-2"},
 	})
@@ -64,8 +65,8 @@ func TestProjectMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 	// Should have items for both projects
 	projectIDs := make(map[string]bool)
 	for _, item := range items {
-		assert.Equal(t, collector.QueryMetrics, item.Kind)
-		assert.Equal(t, collector.TaskTypeMetrics, item.TaskType)
+		assert.Equal(t, types.QueryMetrics, item.Kind)
+		assert.Equal(t, types.TaskTypeMetrics, item.TaskType)
 		projectIDs[item.AliasKey] = true
 	}
 	assert.True(t, projectIDs["proj-1"], "should have items for proj-1")
@@ -80,7 +81,7 @@ func TestProjectMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -122,7 +123,7 @@ func TestProjectMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T
 	now := fakeClock.Now()
 	retention := 1 * time.Hour
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	})
 
@@ -159,7 +160,7 @@ func TestProjectMetricsGenerator_Poll_NoTargets_ReturnsNil(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{})
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{})
 
 	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		BaseMetricsConfig: collector.BaseMetricsConfig{
@@ -183,7 +184,7 @@ func TestProjectMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	now := fakeClock.Now()
 	projectID := "proj-1"
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       projectID,
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -236,10 +237,10 @@ func TestProjectMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "metrics:" + projectID,
-		Kind:     collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics,
+		Kind:     types.QueryMetrics,
+		TaskType: types.TaskTypeMetrics,
 		AliasKey: projectID,
 		Params: map[string]any{
 			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -267,7 +268,7 @@ func TestProjectMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "test"},
 	})
 
@@ -283,7 +284,7 @@ func TestProjectMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 		},
 	})
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "metrics:proj-1",
 		AliasKey: "proj-1",
 	}
@@ -301,7 +302,7 @@ func TestProjectMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	now := fakeClock.Now()
 	projectID := "proj-1"
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: projectID, ProjectName: "test"},
 	})
 
@@ -320,7 +321,7 @@ func TestProjectMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	})
 
 	data, _ := json.Marshal([]map[string]any{})
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "metrics:" + projectID,
 		AliasKey: projectID,
 		Params: map[string]any{
@@ -408,7 +409,7 @@ func TestProjectMetricsGenerator_Poll_GapChunking(t *testing.T) {
 			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 			now := fakeClock.Now()
 
-			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+			targets.EXPECT().Targets().Return([]types.ServiceTarget{
 				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
 			})
 			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()

@@ -3,13 +3,27 @@ package collector_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/sink"
 )
+
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+// testCreditConfig is a stable fixture used across scheduler tests.
+var testCreditConfig = config.CreditsConfig{
+	MetricsRate:   8.0,
+	LogsRate:      6.0,
+	DiscoveryRate: 1.0,
+	UsageRate:     1.0,
+	MaxCredits:    4.0,
+}
 
 func strPtr(s string) *string { return &s }
 
@@ -34,7 +48,7 @@ func (r *recordingSink) WriteLogs(ctx context.Context, l []sink.LogEntry) error 
 }
 func (r *recordingSink) Close() error { return nil }
 
-func mustMarshalCoverage(t *testing.T, intervals []collector.CoverageInterval) []byte {
+func mustMarshalCoverage(t *testing.T, intervals []coverage.CoverageInterval) []byte {
 	t.Helper()
 	data, err := json.Marshal(intervals)
 	require.NoError(t, err)

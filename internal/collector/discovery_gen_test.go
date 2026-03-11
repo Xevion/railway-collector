@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"go.uber.org/mock/gomock"
 )
@@ -17,7 +18,7 @@ func TestDiscoveryGenerator_Type(t *testing.T) {
 	gen := collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
 		Logger: slog.Default(),
 	})
-	assert.Equal(t, collector.TaskTypeDiscovery, gen.Type())
+	assert.Equal(t, types.TaskTypeDiscovery, gen.Type())
 }
 
 func TestDiscoveryGenerator_Poll_EmitsOneItem(t *testing.T) {
@@ -35,8 +36,8 @@ func TestDiscoveryGenerator_Poll_EmitsOneItem(t *testing.T) {
 	require.Len(t, items, 1)
 
 	assert.Equal(t, "discovery", items[0].ID)
-	assert.Equal(t, collector.QueryDiscovery, items[0].Kind)
-	assert.Equal(t, collector.TaskTypeDiscovery, items[0].TaskType)
+	assert.Equal(t, types.QueryDiscovery, items[0].Kind)
+	assert.Equal(t, types.TaskTypeDiscovery, items[0].TaskType)
 }
 
 func TestDiscoveryGenerator_Poll_RespectsInterval(t *testing.T) {
@@ -67,7 +68,7 @@ func TestDiscoveryGenerator_Deliver_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targets := mocks.NewMockTargetProvider(ctrl)
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1"},
 		{ProjectID: "proj-2"},
 	})
@@ -78,7 +79,7 @@ func TestDiscoveryGenerator_Deliver_Success(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	item := collector.WorkItem{ID: "discovery", Kind: collector.QueryDiscovery}
+	item := types.WorkItem{ID: "discovery", Kind: types.QueryDiscovery}
 
 	// Should not panic, should log target count
 	gen.Deliver(context.Background(), item, nil, nil)
@@ -94,7 +95,7 @@ func TestDiscoveryGenerator_Deliver_Error(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	item := collector.WorkItem{ID: "discovery", Kind: collector.QueryDiscovery}
+	item := types.WorkItem{ID: "discovery", Kind: types.QueryDiscovery}
 
 	// Should not panic
 	gen.Deliver(context.Background(), item, nil, assert.AnError)

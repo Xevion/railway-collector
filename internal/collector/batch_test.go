@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
 func TestFragmentFromWorkItem_Metrics(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+	item := types.WorkItem{
+		ID: "metrics:proj-a", Kind: types.QueryMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 		Params: map[string]any{
 			"startDate":              "2025-01-01T00:00:00Z",
 			"endDate":                "2025-01-01T06:00:00Z",
@@ -43,9 +44,9 @@ func TestFragmentFromWorkItem_Metrics(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_MetricsNoEndDate(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "metrics:proj-a", Kind: collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+	item := types.WorkItem{
+		ID: "metrics:proj-a", Kind: types.QueryMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 		Params: map[string]any{
 			"startDate":    "2025-01-01T00:00:00Z",
 			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
@@ -60,9 +61,9 @@ func TestFragmentFromWorkItem_MetricsNoEndDate(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_EnvironmentLogs(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "envlogs:env-a", Kind: collector.QueryEnvironmentLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+	item := types.WorkItem{
+		ID: "envlogs:env-a", Kind: types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "env-a",
 		Params: map[string]any{
 			"afterDate":  "2025-01-01T00:00:00Z",
 			"beforeDate": "2025-01-01T06:00:00Z",
@@ -82,9 +83,9 @@ func TestFragmentFromWorkItem_EnvironmentLogs(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_BuildLogs(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "buildlogs:dep-a", Kind: collector.QueryBuildLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "dep-a",
+	item := types.WorkItem{
+		ID: "buildlogs:dep-a", Kind: types.QueryBuildLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "dep-a",
 		Params: map[string]any{
 			"limit":     500,
 			"startDate": "2025-01-01T00:00:00Z",
@@ -100,9 +101,9 @@ func TestFragmentFromWorkItem_BuildLogs(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_HttpLogs(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "httplogs:dep-a", Kind: collector.QueryHttpLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "dep-a",
+	item := types.WorkItem{
+		ID: "httplogs:dep-a", Kind: types.QueryHttpLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "dep-a",
 		Params: map[string]any{
 			"limit":     500,
 			"startDate": "2025-01-01T00:00:00Z",
@@ -183,17 +184,17 @@ func TestPack_Empty(t *testing.T) {
 }
 
 func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
-	item1 := collector.WorkItem{
-		ID: "m1", Kind: collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+	item1 := types.WorkItem{
+		ID: "m1", Kind: types.QueryMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
 		Params: map[string]any{
 			"startDate":    "2025-01-01T00:00:00Z",
 			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		},
 	}
-	item2 := collector.WorkItem{
-		ID: "l1", Kind: collector.QueryEnvironmentLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+	item2 := types.WorkItem{
+		ID: "l1", Kind: types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "env-a",
 		Params: map[string]any{
 			"afterDate":  "2025-01-01T00:00:00Z",
 			"afterLimit": 500,
@@ -218,42 +219,42 @@ func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
 
 func TestSortByPriority(t *testing.T) {
 	fragments := []collector.AliasFragment{
-		{Alias: "l1", Item: collector.WorkItem{TaskType: collector.TaskTypeLogs}},
-		{Alias: "m1", Item: collector.WorkItem{TaskType: collector.TaskTypeMetrics}},
-		{Alias: "d1", Item: collector.WorkItem{TaskType: collector.TaskTypeDiscovery}},
+		{Alias: "l1", Item: types.WorkItem{TaskType: types.TaskTypeLogs}},
+		{Alias: "m1", Item: types.WorkItem{TaskType: types.TaskTypeMetrics}},
+		{Alias: "d1", Item: types.WorkItem{TaskType: types.TaskTypeDiscovery}},
 	}
 
 	collector.SortByPriority(fragments)
 
-	assert.Equal(t, collector.TaskTypeMetrics, fragments[0].Item.TaskType)
-	assert.Equal(t, collector.TaskTypeLogs, fragments[1].Item.TaskType)
-	assert.Equal(t, collector.TaskTypeDiscovery, fragments[2].Item.TaskType)
+	assert.Equal(t, types.TaskTypeMetrics, fragments[0].Item.TaskType)
+	assert.Equal(t, types.TaskTypeLogs, fragments[1].Item.TaskType)
+	assert.Equal(t, types.TaskTypeDiscovery, fragments[2].Item.TaskType)
 }
 
 // fakeGenerator implements TaskGenerator for testing result dispatch.
 type fakeGenerator struct {
 	deliveries []fakeDelivery
-	taskType   collector.TaskType
+	taskType   types.TaskType
 }
 
 type fakeDelivery struct {
-	item collector.WorkItem
+	item types.WorkItem
 	data json.RawMessage
 	err  error
 }
 
-func (g *fakeGenerator) Poll(_ time.Time) []collector.WorkItem { return nil }
-func (g *fakeGenerator) Type() collector.TaskType              { return g.taskType }
+func (g *fakeGenerator) Poll(_ time.Time) []types.WorkItem { return nil }
+func (g *fakeGenerator) Type() types.TaskType              { return g.taskType }
 func (g *fakeGenerator) NextPoll() time.Time                   { return time.Time{} }
-func (g *fakeGenerator) Deliver(_ context.Context, item collector.WorkItem, data json.RawMessage, err error) {
+func (g *fakeGenerator) Deliver(_ context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	g.deliveries = append(g.deliveries, fakeDelivery{item: item, data: data, err: err})
 }
 
 func TestDispatchRequestResults_Success(t *testing.T) {
-	gen := &fakeGenerator{taskType: collector.TaskTypeMetrics}
+	gen := &fakeGenerator{taskType: types.TaskTypeMetrics}
 	alias := railway.SanitizeAlias("proj-a")
 
-	item := collector.WorkItem{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"}
+	item := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
 	req := collector.Request{
 		Fragments: []collector.AliasFragment{
 			{Alias: alias, Item: item},
@@ -275,9 +276,9 @@ func TestDispatchRequestResults_Success(t *testing.T) {
 }
 
 func TestDispatchRequestResults_QueryError(t *testing.T) {
-	gen := &fakeGenerator{taskType: collector.TaskTypeMetrics}
-	item1 := collector.WorkItem{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"}
-	item2 := collector.WorkItem{ID: "m2", Kind: collector.QueryMetrics, AliasKey: "proj-b"}
+	gen := &fakeGenerator{taskType: types.TaskTypeMetrics}
+	item1 := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
+	item2 := types.WorkItem{ID: "m2", Kind: types.QueryMetrics, AliasKey: "proj-b"}
 
 	req := collector.Request{
 		Fragments: []collector.AliasFragment{
@@ -295,10 +296,10 @@ func TestDispatchRequestResults_QueryError(t *testing.T) {
 }
 
 func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
-	gen := &fakeGenerator{taskType: collector.TaskTypeLogs}
+	gen := &fakeGenerator{taskType: types.TaskTypeLogs}
 	depAlias := railway.SanitizeAlias("dep-123") + "_build"
 
-	item := collector.WorkItem{ID: "b1", Kind: collector.QueryBuildLogs, AliasKey: "dep-123"}
+	item := types.WorkItem{ID: "b1", Kind: types.QueryBuildLogs, AliasKey: "dep-123"}
 	req := collector.Request{
 		Fragments: []collector.AliasFragment{
 			{Alias: depAlias, Item: item},
@@ -319,9 +320,9 @@ func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_ServiceMetrics(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "svc-metrics:svc-1:env-1", Kind: collector.QueryServiceMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+	item := types.WorkItem{
+		ID: "svc-metrics:svc-1:env-1", Kind: types.QueryServiceMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"serviceId":              "svc-1",
 			"environmentId":          "env-1",
@@ -352,9 +353,9 @@ func TestFragmentFromWorkItem_ServiceMetrics(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_ReplicaMetrics(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "replica-metrics:svc-1:env-1", Kind: collector.QueryReplicaMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+	item := types.WorkItem{
+		ID: "replica-metrics:svc-1:env-1", Kind: types.QueryReplicaMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"serviceId":              "svc-1",
 			"environmentId":          "env-1",
@@ -377,9 +378,9 @@ func TestFragmentFromWorkItem_ReplicaMetrics(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_HttpDurationMetrics(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "http-duration:svc-1:env-1", Kind: collector.QueryHttpDurationMetrics,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+	item := types.WorkItem{
+		ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics,
+		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"serviceId":     "svc-1",
 			"environmentId": "env-1",
@@ -403,9 +404,9 @@ func TestFragmentFromWorkItem_HttpDurationMetrics(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_HttpMetricsGroupedByStatus(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "http-status:svc-1:env-1", Kind: collector.QueryHttpMetricsGroupedByStatus,
-		TaskType: collector.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+	item := types.WorkItem{
+		ID: "http-status:svc-1:env-1", Kind: types.QueryHttpMetricsGroupedByStatus,
+		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"serviceId":     "svc-1",
 			"environmentId": "env-1",
@@ -429,9 +430,9 @@ func TestFragmentFromWorkItem_HttpMetricsGroupedByStatus(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_Usage(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "usage:proj-1", Kind: collector.QueryUsage,
-		TaskType: collector.TaskTypeUsage, AliasKey: "proj-1",
+	item := types.WorkItem{
+		ID: "usage:proj-1", Kind: types.QueryUsage,
+		TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
 		Params: map[string]any{
 			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 			"groupBy":      []railway.MetricTag{railway.MetricTagProjectId},
@@ -448,9 +449,9 @@ func TestFragmentFromWorkItem_Usage(t *testing.T) {
 }
 
 func TestFragmentFromWorkItem_EstimatedUsage(t *testing.T) {
-	item := collector.WorkItem{
-		ID: "estimated-usage:proj-1", Kind: collector.QueryEstimatedUsage,
-		TaskType: collector.TaskTypeUsage, AliasKey: "proj-1",
+	item := types.WorkItem{
+		ID: "estimated-usage:proj-1", Kind: types.QueryEstimatedUsage,
+		TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
 		Params: map[string]any{
 			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		},

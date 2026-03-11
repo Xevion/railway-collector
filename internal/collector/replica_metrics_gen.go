@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -45,9 +47,9 @@ func NewReplicaMetricsGenerator(cfg ReplicaMetricsGeneratorConfig) *ReplicaMetri
 	}
 }
 
-// Type returns TaskTypeMetrics.
-func (g *ReplicaMetricsGenerator) Type() TaskType {
-	return TaskTypeMetrics
+// Type returns types.TaskTypeMetrics.
+func (g *ReplicaMetricsGenerator) Type() types.TaskType {
+	return types.TaskTypeMetrics
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -56,7 +58,7 @@ func (g *ReplicaMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
 // Poll scans coverage gaps for all unique service+environment pairs,
 // prioritizes by recency (live edge first), and returns WorkItems targeting
 // the replicaMetrics endpoint.
-func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
+func (g *ReplicaMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	items := pollCoverageGaps(now, gapPollParams{
 		store:           g.store,
 		discovery:       g.discovery,
@@ -67,21 +69,21 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 		nextPoll:        g.nextPoll,
 		itemsPerEmit:    1,
 		logPrefix:       "replica metric",
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			svcEnvs := uniqueServiceEnvironments(targets)
 			entities := make([]pollEntity, len(svcEnvs))
 			for i, t := range svcEnvs {
 				entities[i] = pollEntity{
 					Key:          t.CompositeKey(),
-					CoverageType: CoverageTypeReplicaMetric,
+					CoverageType: coverage.CoverageTypeReplicaMetric,
 					LogAttrs:     []any{"service_id", t.ServiceID, "environment_id", t.EnvironmentID},
 					Data:         t,
 				}
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
-			t := entity.Data.(ServiceTarget)
+		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+			t := entity.Data.(types.ServiceTarget)
 			params := map[string]any{
 				"serviceId":              t.ServiceID,
 				"environmentId":          t.EnvironmentID,
@@ -95,10 +97,10 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 				params["endDate"] = chunk.End.Format(time.RFC3339)
 				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
 			}
-			return []WorkItem{{
+			return []types.WorkItem{{
 				ID:       fmt.Sprintf("replica-metrics:%s:%s:%s", t.ServiceID, t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-				Kind:     QueryReplicaMetrics,
-				TaskType: TaskTypeMetrics,
+				Kind:     types.QueryReplicaMetrics,
+				TaskType: types.TaskTypeMetrics,
 				AliasKey: entity.Key,
 				BatchKey: batchKey,
 				Params:   params,
@@ -116,7 +118,7 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 // Deliver processes the raw replica metrics JSON response for a single
 // service+environment. It transforms the data into MetricPoints with
 // replica_name labels, writes to sinks, and updates coverage.
-func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	compositeKey := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
@@ -159,7 +161,7 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		covKey := CoverageKey(compositeKey, CoverageTypeReplicaMetric)
+		covKey := coverage.CoverageKey(compositeKey, coverage.CoverageTypeReplicaMetric)
 		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
 			g.logger.Warn("failed to update replica metric coverage",
 				"service", serviceName, "service_id", serviceID,

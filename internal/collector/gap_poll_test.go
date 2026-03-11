@@ -10,14 +10,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 )
 
 // fakeTargetProvider is a minimal TargetProvider for internal tests.
 type fakeTargetProvider struct {
-	targets []ServiceTarget
+	targets []types.ServiceTarget
 }
 
-func (f *fakeTargetProvider) Targets() []ServiceTarget        { return f.targets }
+func (f *fakeTargetProvider) Targets() []types.ServiceTarget        { return f.targets }
 func (f *fakeTargetProvider) Refresh(_ context.Context) error { return nil }
 
 // fakeStateStore is a minimal StateStore for internal tests.
@@ -39,18 +42,18 @@ func (f *fakeStateStore) ListDiscoveryCache() (map[string][]byte, error) { retur
 func (f *fakeStateStore) DeleteDiscoveryCache(string) error              { return nil }
 func (f *fakeStateStore) Close() error                                   { return nil }
 
-// simpleBuildItems returns a buildItems callback that creates one WorkItem per
+// simpleBuildItems returns a buildItems callback that creates one types.WorkItem per
 // chunk with a predictable ID format for assertions.
-func simpleBuildItems(kind QueryKind) func(pollEntity, TimeRange, bool) []WorkItem {
-	return func(e pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+func simpleBuildItems(kind types.QueryKind) func(pollEntity, coverage.TimeRange, bool) []types.WorkItem {
+	return func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
 		id := fmt.Sprintf("test:%s:%s", e.Key, chunk.Start.Format(time.RFC3339))
 		if isLiveEdge {
 			id += ":live"
 		}
-		return []WorkItem{{
+		return []types.WorkItem{{
 			ID:       id,
 			Kind:     kind,
-			TaskType: TaskTypeMetrics,
+			TaskType: types.TaskTypeMetrics,
 			AliasKey: e.Key,
 			Params: map[string]any{
 				"startDate": chunk.Start.Format(time.RFC3339),
@@ -66,17 +69,17 @@ func TestPollCoverageGaps_ReturnsNilBeforeNextPoll(t *testing.T) {
 
 	items := pollCoverageGaps(now, gapPollParams{
 		store:           &fakeStateStore{},
-		discovery:       &fakeTargetProvider{targets: []ServiceTarget{{ProjectID: "p1"}}},
+		discovery:       &fakeTargetProvider{targets: []types.ServiceTarget{{ProjectID: "p1"}}},
 		logger:          slog.Default(),
 		metricRetention: 1 * time.Hour,
 		chunkSize:       6 * time.Hour,
 		maxItemsPerPoll: 10,
 		nextPoll:        nextPoll,
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			t.Fatal("entities should not be called when before nextPoll")
 			return nil
 		},
-		buildItems:   simpleBuildItems(QueryMetrics),
+		buildItems:   simpleBuildItems(types.QueryMetrics),
 		itemsPerEmit: 1,
 		logPrefix:    "test",
 	})
@@ -95,10 +98,10 @@ func TestPollCoverageGaps_ReturnsNilWhenNoTargets(t *testing.T) {
 		chunkSize:       6 * time.Hour,
 		maxItemsPerPoll: 10,
 		nextPoll:        time.Time{},
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			return nil // no targets → no entities
 		},
-		buildItems:   simpleBuildItems(QueryMetrics),
+		buildItems:   simpleBuildItems(types.QueryMetrics),
 		itemsPerEmit: 1,
 		logPrefix:    "test",
 	})
@@ -111,7 +114,7 @@ func TestPollCoverageGaps_EmitsItemsForGaps(t *testing.T) {
 
 	items := pollCoverageGaps(now, gapPollParams{
 		store: &fakeStateStore{},
-		discovery: &fakeTargetProvider{targets: []ServiceTarget{
+		discovery: &fakeTargetProvider{targets: []types.ServiceTarget{
 			{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		}},
 		logger:          slog.Default(),
@@ -119,14 +122,14 @@ func TestPollCoverageGaps_EmitsItemsForGaps(t *testing.T) {
 		chunkSize:       6 * time.Hour, // 1h gap < 6h chunk, so single item
 		maxItemsPerPoll: 10,
 		nextPoll:        time.Time{},
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			return []pollEntity{{
 				Key:          "proj-1",
-				CoverageType: CoverageTypeMetric,
+				CoverageType: coverage.CoverageTypeMetric,
 				LogAttrs:     []any{"project_id", "proj-1"},
 			}}
 		},
-		buildItems:   simpleBuildItems(QueryMetrics),
+		buildItems:   simpleBuildItems(types.QueryMetrics),
 		itemsPerEmit: 1,
 		logPrefix:    "metric",
 	})
@@ -142,7 +145,7 @@ func TestPollCoverageGaps_RespectsBudget(t *testing.T) {
 	maxItems := 2
 	items := pollCoverageGaps(now, gapPollParams{
 		store: &fakeStateStore{},
-		discovery: &fakeTargetProvider{targets: []ServiceTarget{
+		discovery: &fakeTargetProvider{targets: []types.ServiceTarget{
 			{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 			{ProjectID: "proj-2", ServiceID: "svc-2", EnvironmentID: "env-2"},
 			{ProjectID: "proj-3", ServiceID: "svc-3", EnvironmentID: "env-3"},
@@ -152,18 +155,18 @@ func TestPollCoverageGaps_RespectsBudget(t *testing.T) {
 		chunkSize:       6 * time.Hour,
 		maxItemsPerPoll: maxItems,
 		nextPoll:        time.Time{},
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			var entities []pollEntity
 			for _, tgt := range targets {
 				entities = append(entities, pollEntity{
 					Key:          tgt.ProjectID,
-					CoverageType: CoverageTypeMetric,
+					CoverageType: coverage.CoverageTypeMetric,
 					LogAttrs:     []any{"project_id", tgt.ProjectID},
 				})
 			}
 			return entities
 		},
-		buildItems:   simpleBuildItems(QueryMetrics),
+		buildItems:   simpleBuildItems(types.QueryMetrics),
 		itemsPerEmit: 1,
 		logPrefix:    "metric",
 	})
@@ -175,17 +178,17 @@ func TestPollCoverageGaps_BudgetAccountsForItemsPerEmit(t *testing.T) {
 	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 
 	// buildItems returns 2 items per call (like HTTP generator)
-	pairBuilder := func(e pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+	pairBuilder := func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
 		base := fmt.Sprintf("test:%s:%s", e.Key, chunk.Start.Format(time.RFC3339))
-		return []WorkItem{
-			{ID: base + ":a", Kind: QueryMetrics, AliasKey: e.Key},
-			{ID: base + ":b", Kind: QueryMetrics, AliasKey: e.Key},
+		return []types.WorkItem{
+			{ID: base + ":a", Kind: types.QueryMetrics, AliasKey: e.Key},
+			{ID: base + ":b", Kind: types.QueryMetrics, AliasKey: e.Key},
 		}
 	}
 
 	items := pollCoverageGaps(now, gapPollParams{
 		store: &fakeStateStore{},
-		discovery: &fakeTargetProvider{targets: []ServiceTarget{
+		discovery: &fakeTargetProvider{targets: []types.ServiceTarget{
 			{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 			{ProjectID: "proj-2", ServiceID: "svc-2", EnvironmentID: "env-2"},
 		}},
@@ -194,12 +197,12 @@ func TestPollCoverageGaps_BudgetAccountsForItemsPerEmit(t *testing.T) {
 		chunkSize:       6 * time.Hour,
 		maxItemsPerPoll: 3, // room for one pair (2) but not two (4)
 		nextPoll:        time.Time{},
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			var entities []pollEntity
 			for _, tgt := range targets {
 				entities = append(entities, pollEntity{
 					Key:          tgt.ProjectID,
-					CoverageType: CoverageTypeMetric,
+					CoverageType: coverage.CoverageTypeMetric,
 				})
 			}
 			return entities
@@ -218,7 +221,7 @@ func TestPollCoverageGaps_LiveEdgeSplitsOversizedGap(t *testing.T) {
 
 	items := pollCoverageGaps(now, gapPollParams{
 		store: &fakeStateStore{},
-		discovery: &fakeTargetProvider{targets: []ServiceTarget{
+		discovery: &fakeTargetProvider{targets: []types.ServiceTarget{
 			{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		}},
 		logger:          slog.Default(),
@@ -226,14 +229,14 @@ func TestPollCoverageGaps_LiveEdgeSplitsOversizedGap(t *testing.T) {
 		chunkSize:       6 * time.Hour,
 		maxItemsPerPoll: 50,
 		nextPoll:        time.Time{},
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			return []pollEntity{{
 				Key:          "proj-1",
-				CoverageType: CoverageTypeMetric,
+				CoverageType: coverage.CoverageTypeMetric,
 				LogAttrs:     []any{"project_id", "proj-1"},
 			}}
 		},
-		buildItems:   simpleBuildItems(QueryMetrics),
+		buildItems:   simpleBuildItems(types.QueryMetrics),
 		itemsPerEmit: 1,
 		logPrefix:    "metric",
 	})

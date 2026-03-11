@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -23,7 +24,7 @@ func TestReplicaMetricsGenerator_Type(t *testing.T) {
 			Logger: slog.Default(),
 		},
 	})
-	assert.Equal(t, collector.TaskTypeMetrics, gen.Type())
+	assert.Equal(t, types.TaskTypeMetrics, gen.Type())
 }
 
 func TestReplicaMetricsGenerator_Poll_EmitsItems(t *testing.T) {
@@ -34,7 +35,7 @@ func TestReplicaMetricsGenerator_Poll_EmitsItems(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 	})
 
@@ -60,8 +61,8 @@ func TestReplicaMetricsGenerator_Poll_EmitsItems(t *testing.T) {
 	require.NotEmpty(t, items)
 
 	for _, item := range items {
-		assert.Equal(t, collector.QueryReplicaMetrics, item.Kind)
-		assert.Equal(t, collector.TaskTypeMetrics, item.TaskType)
+		assert.Equal(t, types.QueryReplicaMetrics, item.Kind)
+		assert.Equal(t, types.TaskTypeMetrics, item.TaskType)
 
 		// Replica metrics should not have groupBy in params
 		_, hasGroupBy := item.Params["groupBy"]
@@ -136,7 +137,7 @@ func TestReplicaMetricsGenerator_Poll_GapChunking(t *testing.T) {
 			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 			now := fakeClock.Now()
 
-			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+			targets.EXPECT().Targets().Return([]types.ServiceTarget{
 				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 			})
 			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -187,7 +188,7 @@ func TestReplicaMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -236,10 +237,10 @@ func TestReplicaMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "replica-metrics:svc-1:env-1",
-		Kind:     collector.QueryReplicaMetrics,
-		TaskType: collector.TaskTypeMetrics,
+		Kind:     types.QueryReplicaMetrics,
+		TaskType: types.TaskTypeMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -265,7 +266,7 @@ func TestReplicaMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"},
 	})
 
@@ -281,7 +282,7 @@ func TestReplicaMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 		},
 	})
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "replica-metrics:svc-1:env-1",
 		AliasKey: "svc-1:env-1",
 	}
@@ -297,7 +298,7 @@ func TestReplicaMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 	}).AnyTimes()
 
@@ -315,7 +316,7 @@ func TestReplicaMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	})
 
 	data, _ := json.Marshal([]map[string]any{})
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "replica-metrics:svc-1:env-1",
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{

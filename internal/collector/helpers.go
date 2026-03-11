@@ -9,6 +9,8 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -143,7 +145,7 @@ type compositeKeyInfo struct {
 
 // parseCompositeKey splits a "serviceID:environmentID" composite key and
 // looks up the human-readable names from the given targets slice.
-func parseCompositeKey(key string, targets []ServiceTarget) compositeKeyInfo {
+func parseCompositeKey(key string, targets []types.ServiceTarget) compositeKeyInfo {
 	parts := strings.SplitN(key, ":", 2)
 	info := compositeKeyInfo{serviceID: parts[0]}
 	if len(parts) > 1 {
@@ -161,7 +163,7 @@ func parseCompositeKey(key string, targets []ServiceTarget) compositeKeyInfo {
 	return info
 }
 
-func uniqueProjectIDs(targets []ServiceTarget) []string {
+func uniqueProjectIDs(targets []types.ServiceTarget) []string {
 	seen := map[string]bool{}
 	var ids []string
 	for _, t := range targets {
@@ -174,10 +176,10 @@ func uniqueProjectIDs(targets []ServiceTarget) []string {
 }
 
 // uniqueServiceEnvironments returns deduplicated ServiceTargets by (serviceID, environmentID) pair.
-func uniqueServiceEnvironments(targets []ServiceTarget) []ServiceTarget {
+func uniqueServiceEnvironments(targets []types.ServiceTarget) []types.ServiceTarget {
 	type key struct{ svc, env string }
 	seen := map[key]bool{}
-	var result []ServiceTarget
+	var result []types.ServiceTarget
 	for _, t := range targets {
 		k := key{t.ServiceID, t.EnvironmentID}
 		if !seen[k] {
@@ -202,7 +204,7 @@ type pollEntity struct {
 	Key          string // entity key for coverage lookup (projectID or compositeKey)
 	CoverageType string // coverage type suffix (CoverageTypeMetric, etc.)
 	LogAttrs     []any  // structured log key-value pairs for debug messages
-	Data         any    // generator-specific data (e.g. ServiceTarget) to avoid re-querying discovery
+	Data         any    // generator-specific data (e.g. types.ServiceTarget) to avoid re-querying discovery
 }
 
 // gapPollParams configures the shared gap-polling loop used by all metrics
@@ -218,12 +220,12 @@ type gapPollParams struct {
 	nextPoll        time.Time // guard: skip if now < nextPoll
 
 	// entities extracts the iteration list from discovered targets.
-	entities func(targets []ServiceTarget) []pollEntity
+	entities func(targets []types.ServiceTarget) []pollEntity
 
-	// buildItems constructs WorkItem(s) for a gap/chunk. Returns 1 item for
+	// buildItems constructs types.WorkItem(s) for a gap/chunk. Returns 1 item for
 	// most generators, 2 for HTTP (duration + status pair). isLiveEdge tells
 	// the callback whether to omit endDate or use a live batchKey.
-	buildItems func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem
+	buildItems func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem
 
 	// itemsPerEmit is the budget cost per buildItems call (1 for most, 2 for HTTP).
 	itemsPerEmit int
@@ -236,7 +238,7 @@ type gapPollParams struct {
 // generators' Poll methods. It iterates entities, loads coverage, finds gaps,
 // prioritizes them, splits oversized live-edge gaps into chunks, and emits
 // WorkItems via the buildItems callback.
-func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
+func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 	if now.Before(p.nextPoll) {
 		return nil
 	}
@@ -253,7 +255,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 
 	retentionStart := now.Add(-p.metricRetention)
 
-	var items []WorkItem
+	var items []types.WorkItem
 	itemCount := 0
 
 	for _, entity := range entities {
@@ -261,15 +263,15 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 			break
 		}
 
-		coverageKey := CoverageKey(entity.Key, entity.CoverageType)
-		existing, err := LoadCoverage(p.store, coverageKey)
+		coverageKey := coverage.CoverageKey(entity.Key, entity.CoverageType)
+		existing, err := coverage.LoadCoverage(p.store, coverageKey)
 		if err != nil {
 			args := append([]any{"error", err}, entity.LogAttrs...)
 			p.logger.Warn("failed to load "+p.logPrefix+" coverage", args...)
 			continue
 		}
 
-		gaps := FindGaps(existing, retentionStart, now)
+		gaps := coverage.FindGaps(existing, retentionStart, now)
 		if len(gaps) == 0 {
 			continue
 		}
@@ -285,7 +287,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 		}, entity.LogAttrs...)
 		p.logger.Debug(p.logPrefix+" coverage gaps found", args...)
 
-		prioritized := PrioritizeGaps(gaps, now)
+		prioritized := coverage.PrioritizeGaps(gaps, now)
 
 		for _, gap := range prioritized {
 			if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -300,7 +302,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 				// the live-edge query.
 				gapDuration := gap.End.Sub(gap.Start)
 				if gapDuration > p.chunkSize {
-					olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-p.chunkSize)}
+					olderGap := coverage.TimeRange{Start: gap.Start, End: gap.End.Add(-p.chunkSize)}
 					chunks := alignedChunks(olderGap, p.chunkSize)
 					for _, chunk := range chunks {
 						if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -311,7 +313,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 						itemCount += p.itemsPerEmit
 					}
 					// Adjust the live-edge start to the tail
-					gap = TimeRange{Start: gap.End.Add(-p.chunkSize), End: gap.End}
+					gap = coverage.TimeRange{Start: gap.End.Add(-p.chunkSize), End: gap.End}
 				}
 
 				if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -339,9 +341,9 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []WorkItem {
 	return items
 }
 
-// deploymentBaseLabels finds the ServiceTarget matching a deployment ID and
+// deploymentBaseLabels finds the types.ServiceTarget matching a deployment ID and
 // returns a base label map. Falls back to just {"deployment_id": id}.
-func deploymentBaseLabels(deploymentID string, targets []ServiceTarget) map[string]string {
+func deploymentBaseLabels(deploymentID string, targets []types.ServiceTarget) map[string]string {
 	for _, t := range targets {
 		if t.DeploymentID == deploymentID {
 			return map[string]string{
@@ -358,10 +360,10 @@ func deploymentBaseLabels(deploymentID string, targets []ServiceTarget) map[stri
 	return map[string]string{"deployment_id": deploymentID}
 }
 
-// environmentServiceLookup builds a map of serviceID → ServiceTarget for all
+// environmentServiceLookup builds a map of serviceID → types.ServiceTarget for all
 // targets in the given environment, also returning the environment name.
-func environmentServiceLookup(envID string, targets []ServiceTarget) (services map[string]ServiceTarget, envName string) {
-	services = make(map[string]ServiceTarget)
+func environmentServiceLookup(envID string, targets []types.ServiceTarget) (services map[string]types.ServiceTarget, envName string) {
+	services = make(map[string]types.ServiceTarget)
 	for _, t := range targets {
 		if t.EnvironmentID == envID {
 			services[t.ServiceID] = t
@@ -389,21 +391,21 @@ func ResolveMeasurements(names []string) []railway.MetricMeasurement {
 // start must be non-zero; callers should guard with !start.IsZero() before calling.
 // resolution is the sample rate in seconds (0 for logs or when unset).
 func updateCoverage(store StateStore, coverageKey string, start, end time.Time, empty bool, resolution int) error {
-	existing, err := LoadCoverage(store, coverageKey)
+	existing, err := coverage.LoadCoverage(store, coverageKey)
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
-	kind := CoverageCollected
+	kind := coverage.CoverageCollected
 	if empty {
-		kind = CoverageEmpty
+		kind = coverage.CoverageEmpty
 	}
-	updated := InsertInterval(existing, CoverageInterval{
+	updated := coverage.InsertInterval(existing, coverage.CoverageInterval{
 		Start:      start,
 		End:        end,
 		Kind:       kind,
 		Resolution: resolution,
 	})
-	if err := SaveCoverage(store, coverageKey, updated); err != nil {
+	if err := coverage.SaveCoverage(store, coverageKey, updated); err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
 	return nil

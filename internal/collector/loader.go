@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
@@ -57,8 +58,8 @@ type AliasFragment struct {
 	// EstimatedPoints is the estimated number of data points this alias will
 	// return, based on time range, sample rate, and measurement count.
 	EstimatedPoints int
-	// Item is the original WorkItem that produced this fragment.
-	Item WorkItem
+	// Item is the original types.WorkItem that produced this fragment.
+	Item types.WorkItem
 }
 
 // Request is a packed set of alias fragments that fit within the breadth budget.
@@ -89,8 +90,8 @@ func (r *Request) AssembleQuery() (query string, variables map[string]any) {
 }
 
 // Items returns all WorkItems in this request.
-func (r *Request) Items() []WorkItem {
-	items := make([]WorkItem, len(r.Fragments))
+func (r *Request) Items() []types.WorkItem {
+	items := make([]types.WorkItem, len(r.Fragments))
 	for i, f := range r.Fragments {
 		items[i] = f.Item
 	}
@@ -140,7 +141,7 @@ func Pack(fragments []AliasFragment) []Request {
 	return requests
 }
 
-// SortByPriority sorts fragments by TaskType priority (Metrics first, then Logs,
+// SortByPriority sorts fragments by types.TaskType priority (Metrics first, then Logs,
 // then Discovery). Within the same type, order is preserved.
 func SortByPriority(fragments []AliasFragment) {
 	sort.SliceStable(fragments, func(i, j int) bool {

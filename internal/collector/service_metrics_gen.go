@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -42,9 +44,9 @@ func NewServiceMetricsGenerator(cfg ServiceMetricsGeneratorConfig) *ServiceMetri
 	}
 }
 
-// Type returns TaskTypeMetrics.
-func (g *ServiceMetricsGenerator) Type() TaskType {
-	return TaskTypeMetrics
+// Type returns types.TaskTypeMetrics.
+func (g *ServiceMetricsGenerator) Type() types.TaskType {
+	return types.TaskTypeMetrics
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -52,7 +54,7 @@ func (g *ServiceMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
 
 // Poll scans coverage gaps for all unique service+environment pairs,
 // prioritizes by recency (live edge first), and returns WorkItems.
-func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
+func (g *ServiceMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	groupBy := []railway.MetricTag{
 		railway.MetricTagDeploymentId,
 		railway.MetricTagDeploymentInstanceId,
@@ -69,21 +71,21 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 		nextPoll:        g.nextPoll,
 		itemsPerEmit:    1,
 		logPrefix:       "service metric",
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			svcEnvs := uniqueServiceEnvironments(targets)
 			entities := make([]pollEntity, len(svcEnvs))
 			for i, t := range svcEnvs {
 				entities[i] = pollEntity{
 					Key:          t.CompositeKey(),
-					CoverageType: CoverageTypeServiceMetric,
+					CoverageType: coverage.CoverageTypeServiceMetric,
 					LogAttrs:     []any{"service_id", t.ServiceID, "environment_id", t.EnvironmentID},
 					Data:         t,
 				}
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
-			t := entity.Data.(ServiceTarget)
+		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+			t := entity.Data.(types.ServiceTarget)
 			params := map[string]any{
 				"serviceId":              t.ServiceID,
 				"environmentId":          t.EnvironmentID,
@@ -98,10 +100,10 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 				params["endDate"] = chunk.End.Format(time.RFC3339)
 				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
 			}
-			return []WorkItem{{
+			return []types.WorkItem{{
 				ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", t.ServiceID, t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
-				Kind:     QueryServiceMetrics,
-				TaskType: TaskTypeMetrics,
+				Kind:     types.QueryServiceMetrics,
+				TaskType: types.TaskTypeMetrics,
 				AliasKey: entity.Key,
 				BatchKey: batchKey,
 				Params:   params,
@@ -118,7 +120,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 
 // Deliver processes the raw metrics JSON response for a single service+environment.
 // It transforms the data into MetricPoints, writes to sinks, and updates coverage.
-func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	compositeKey := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
@@ -161,7 +163,7 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		covKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
+		covKey := coverage.CoverageKey(compositeKey, coverage.CoverageTypeServiceMetric)
 		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
 			g.logger.Warn("failed to update service metric coverage",
 				"service", serviceName, "service_id", serviceID,

@@ -9,6 +9,8 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/sink"
 )
 
@@ -100,9 +102,9 @@ func NewHttpMetricsGenerator(cfg HttpMetricsGeneratorConfig) *HttpMetricsGenerat
 	}
 }
 
-// Type returns TaskTypeMetrics.
-func (g *HttpMetricsGenerator) Type() TaskType {
-	return TaskTypeMetrics
+// Type returns types.TaskTypeMetrics.
+func (g *HttpMetricsGenerator) Type() types.TaskType {
+	return types.TaskTypeMetrics
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -132,7 +134,7 @@ func (g *HttpMetricsGenerator) statusBatchKeyLive() string {
 
 // Poll scans coverage gaps for all unique service+environment pairs and emits
 // two WorkItems per target: one for duration percentiles, one for status counts.
-func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
+func (g *HttpMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	items := pollCoverageGaps(now, gapPollParams{
 		store:           g.store,
 		discovery:       g.discovery,
@@ -143,21 +145,21 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 		nextPoll:        g.nextPoll,
 		itemsPerEmit:    2,
 		logPrefix:       "http metric",
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			svcEnvs := uniqueServiceEnvironments(targets)
 			entities := make([]pollEntity, len(svcEnvs))
 			for i, t := range svcEnvs {
 				entities[i] = pollEntity{
 					Key:          t.CompositeKey(),
-					CoverageType: CoverageTypeHTTPMetric,
+					CoverageType: coverage.CoverageTypeHTTPMetric,
 					LogAttrs:     []any{"service_id", t.ServiceID, "environment_id", t.EnvironmentID},
 					Data:         t,
 				}
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
-			t := entity.Data.(ServiceTarget)
+		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+			t := entity.Data.(types.ServiceTarget)
 
 			// HTTP endpoints always require endDate; for live edge use now
 			endDate := chunk.End.Format(time.RFC3339)
@@ -170,11 +172,11 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 			}
 
 			startDate := chunk.Start.Format(time.RFC3339)
-			return []WorkItem{
+			return []types.WorkItem{
 				{
 					ID:       fmt.Sprintf("http-duration:%s:%s:%s", t.ServiceID, t.EnvironmentID, startDate),
-					Kind:     QueryHttpDurationMetrics,
-					TaskType: TaskTypeMetrics,
+					Kind:     types.QueryHttpDurationMetrics,
+					TaskType: types.TaskTypeMetrics,
 					AliasKey: entity.Key,
 					BatchKey: durBatchKey,
 					Params: map[string]any{
@@ -187,8 +189,8 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 				},
 				{
 					ID:       fmt.Sprintf("http-status:%s:%s:%s", t.ServiceID, t.EnvironmentID, startDate),
-					Kind:     QueryHttpMetricsGroupedByStatus,
-					TaskType: TaskTypeMetrics,
+					Kind:     types.QueryHttpMetricsGroupedByStatus,
+					TaskType: types.TaskTypeMetrics,
 					AliasKey: entity.Key,
 					BatchKey: statusBatchKey,
 					Params: map[string]any{
@@ -212,7 +214,7 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 
 // Deliver processes the raw JSON response for an HTTP metrics work item.
 // It routes by item.Kind to handle the two different response shapes.
-func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
 	info := parseCompositeKey(item.AliasKey, targets)
@@ -233,9 +235,9 @@ func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data 
 	}
 
 	switch item.Kind {
-	case QueryHttpDurationMetrics:
+	case types.QueryHttpDurationMetrics:
 		g.deliverDuration(ctx, item, data, serviceID, environmentID, serviceName, environmentName, projectName, projectID, now)
-	case QueryHttpMetricsGroupedByStatus:
+	case types.QueryHttpMetricsGroupedByStatus:
 		g.deliverStatus(ctx, item, data, serviceID, environmentID, serviceName, environmentName, projectName, projectID, now)
 	default:
 		g.logger.Error("unknown http metrics query kind",
@@ -244,9 +246,9 @@ func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data 
 	}
 }
 
-// deliverDuration handles QueryHttpDurationMetrics responses.
+// deliverDuration handles types.QueryHttpDurationMetrics responses.
 func (g *HttpMetricsGenerator) deliverDuration(
-	ctx context.Context, item WorkItem, data json.RawMessage,
+	ctx context.Context, item types.WorkItem, data json.RawMessage,
 	serviceID, environmentID, serviceName, environmentName, projectName, projectID string,
 	now time.Time,
 ) {
@@ -273,7 +275,7 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	// Update coverage (duration is the primary coverage updater for both kinds)
 	compositeKey := serviceID + ":" + environmentID
 	if !startTime.IsZero() {
-		covKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
+		covKey := coverage.CoverageKey(compositeKey, coverage.CoverageTypeHTTPMetric)
 		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(resp.Samples) == 0, g.stepSeconds); covErr != nil {
 			g.logger.Warn("failed to update http metric coverage",
 				"service", serviceName, "service_id", serviceID,
@@ -328,9 +330,9 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }
 
-// deliverStatus handles QueryHttpMetricsGroupedByStatus responses.
+// deliverStatus handles types.QueryHttpMetricsGroupedByStatus responses.
 func (g *HttpMetricsGenerator) deliverStatus(
-	ctx context.Context, item WorkItem, data json.RawMessage,
+	ctx context.Context, item types.WorkItem, data json.RawMessage,
 	serviceID, environmentID, serviceName, environmentName, projectName, projectID string,
 	now time.Time,
 ) {

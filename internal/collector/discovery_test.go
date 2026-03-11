@@ -13,6 +13,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/railway"
@@ -130,7 +131,7 @@ func TestDiscovery_Refresh_HappyPath(t *testing.T) {
 	assert.Len(t, targets, 4, "expected 4 total targets (2 projects × 1 env × 2 services)")
 
 	// Build a lookup map by service ID for easier assertions
-	byService := make(map[string]collector.ServiceTarget)
+	byService := make(map[string]types.ServiceTarget)
 	for _, t := range targets {
 		byService[t.ServiceID] = t
 	}

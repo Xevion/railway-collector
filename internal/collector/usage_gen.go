@@ -10,6 +10,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -87,9 +88,9 @@ func NewUsageGenerator(cfg UsageGeneratorConfig) *UsageGenerator {
 	}
 }
 
-// Type returns TaskTypeUsage.
-func (g *UsageGenerator) Type() TaskType {
-	return TaskTypeUsage
+// Type returns types.TaskTypeUsage.
+func (g *UsageGenerator) Type() types.TaskType {
+	return types.TaskTypeUsage
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -116,7 +117,7 @@ func (g *UsageGenerator) estimatedUsageBatchKey() string {
 
 // Poll checks whether it's time to collect usage data and emits WorkItems.
 // For each project, it emits two items: one for usage and one for estimated usage.
-func (g *UsageGenerator) Poll(now time.Time) []WorkItem {
+func (g *UsageGenerator) Poll(now time.Time) []types.WorkItem {
 	if now.Before(g.nextPoll) {
 		return nil
 	}
@@ -133,12 +134,12 @@ func (g *UsageGenerator) Poll(now time.Time) []WorkItem {
 		railway.MetricTagServiceId,
 	}
 
-	var items []WorkItem
+	var items []types.WorkItem
 	for _, pid := range projectIDs {
-		items = append(items, WorkItem{
+		items = append(items, types.WorkItem{
 			ID:       fmt.Sprintf("usage:%s", pid),
-			Kind:     QueryUsage,
-			TaskType: TaskTypeUsage,
+			Kind:     types.QueryUsage,
+			TaskType: types.TaskTypeUsage,
 			AliasKey: pid,
 			BatchKey: g.usageBatchKey(),
 			Params: map[string]any{
@@ -147,10 +148,10 @@ func (g *UsageGenerator) Poll(now time.Time) []WorkItem {
 			},
 		})
 
-		items = append(items, WorkItem{
+		items = append(items, types.WorkItem{
 			ID:       fmt.Sprintf("estimated-usage:%s", pid),
-			Kind:     QueryEstimatedUsage,
-			TaskType: TaskTypeUsage,
+			Kind:     types.QueryEstimatedUsage,
+			TaskType: types.TaskTypeUsage,
 			AliasKey: pid,
 			BatchKey: g.estimatedUsageBatchKey(),
 			Params: map[string]any{
@@ -168,7 +169,7 @@ func (g *UsageGenerator) Poll(now time.Time) []WorkItem {
 
 // Deliver processes the raw JSON response for a usage work item.
 // It routes by item.Kind to handle the two different response shapes.
-func (g *UsageGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+func (g *UsageGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	projectID := item.AliasKey
 	targets := g.discovery.Targets()
 
@@ -189,9 +190,9 @@ func (g *UsageGenerator) Deliver(ctx context.Context, item WorkItem, data json.R
 	}
 
 	switch item.Kind {
-	case QueryUsage:
+	case types.QueryUsage:
 		g.deliverUsage(ctx, item, data, projectID, projectName, targets)
-	case QueryEstimatedUsage:
+	case types.QueryEstimatedUsage:
 		g.deliverEstimatedUsage(ctx, item, data, projectID, projectName, targets)
 	default:
 		g.logger.Error("unknown usage query kind",
@@ -199,10 +200,10 @@ func (g *UsageGenerator) Deliver(ctx context.Context, item WorkItem, data json.R
 	}
 }
 
-// deliverUsage handles QueryUsage responses.
+// deliverUsage handles types.QueryUsage responses.
 func (g *UsageGenerator) deliverUsage(
-	ctx context.Context, _ WorkItem, data json.RawMessage,
-	projectID, projectName string, targets []ServiceTarget,
+	ctx context.Context, _ types.WorkItem, data json.RawMessage,
+	projectID, projectName string, targets []types.ServiceTarget,
 ) {
 	var results []rawUsageResult
 	if unmarshalErr := json.Unmarshal(data, &results); unmarshalErr != nil {
@@ -275,10 +276,10 @@ func (g *UsageGenerator) deliverUsage(
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }
 
-// deliverEstimatedUsage handles QueryEstimatedUsage responses.
+// deliverEstimatedUsage handles types.QueryEstimatedUsage responses.
 func (g *UsageGenerator) deliverEstimatedUsage(
-	ctx context.Context, _ WorkItem, data json.RawMessage,
-	projectID, projectName string, targets []ServiceTarget,
+	ctx context.Context, _ types.WorkItem, data json.RawMessage,
+	projectID, projectName string, targets []types.ServiceTarget,
 ) {
 	var results []rawEstimatedUsageResult
 	if unmarshalErr := json.Unmarshal(data, &results); unmarshalErr != nil {

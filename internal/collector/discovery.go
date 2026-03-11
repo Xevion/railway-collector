@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
+
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/railway"
 )
@@ -52,7 +54,7 @@ func jitteredTTL(base, jitter time.Duration) time.Duration {
 
 // PersistedWorkspaceDiscovery is the JSON-serialized form of a workspace's full discovery result.
 type PersistedWorkspaceDiscovery struct {
-	Targets   []ServiceTarget `json:"targets"`
+	Targets   []types.ServiceTarget `json:"targets"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
@@ -73,7 +75,7 @@ type Discovery struct {
 	jitter       time.Duration // ± jitter applied to each TTL
 
 	mu      sync.RWMutex
-	targets []ServiceTarget
+	targets []types.ServiceTarget
 
 	// Workspace cache: refreshed at workspaceTTL ± jitter
 	wsMu    sync.Mutex
@@ -83,7 +85,7 @@ type Discovery struct {
 
 	// Per-workspace target cache: full discovery result per workspace
 	wsTargetMu    sync.Mutex
-	wsTargetCache map[string]*cachedEntry[[]ServiceTarget] // keyed by workspaceID
+	wsTargetCache map[string]*cachedEntry[[]types.ServiceTarget] // keyed by workspaceID
 }
 
 func compileFilters(patterns []string, logger *slog.Logger) []compiledFilter {
@@ -135,7 +137,7 @@ func NewDiscovery(cfg DiscoveryConfig) *Discovery {
 		compiledEnvironments: compileFilters(cfg.Filters.Environments, cfg.Logger),
 		workspaceTTL:         wsTTL,
 		jitter:               jitter,
-		wsTargetCache:        make(map[string]*cachedEntry[[]ServiceTarget]),
+		wsTargetCache:        make(map[string]*cachedEntry[[]types.ServiceTarget]),
 	}
 
 	if len(cfg.Workspaces) > 0 {
@@ -146,10 +148,10 @@ func NewDiscovery(cfg DiscoveryConfig) *Discovery {
 }
 
 // Targets returns the current set of discovered service targets.
-func (d *Discovery) Targets() []ServiceTarget {
+func (d *Discovery) Targets() []types.ServiceTarget {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	out := make([]ServiceTarget, len(d.targets))
+	out := make([]types.ServiceTarget, len(d.targets))
 	copy(out, d.targets)
 	return out
 }
@@ -164,7 +166,7 @@ func (d *Discovery) Refresh(ctx context.Context) error {
 
 	d.logger.Info("discovering Railway resources", "workspaces", len(workspaces))
 
-	var allTargets []ServiceTarget
+	var allTargets []types.ServiceTarget
 	for _, ws := range workspaces {
 		d.logger.Debug("discovering workspace", "workspace", ws.Name, "id", ws.ID)
 		targets, err := d.discoverWorkspace(ctx, ws)
@@ -198,13 +200,13 @@ func (d *Discovery) Refresh(ctx context.Context) error {
 // discoverFromResponse converts a DiscoverAll API response into ServiceTargets,
 // applying project/service/environment filters. It also checks pageInfo for
 // overflow and logs warnings.
-func (d *Discovery) discoverFromResponse(resp *railway.DiscoverAllResponse, ws Workspace) []ServiceTarget {
+func (d *Discovery) discoverFromResponse(resp *railway.DiscoverAllResponse, ws Workspace) []types.ServiceTarget {
 	if resp.Projects.PageInfo.HasNextPage {
 		d.logger.Warn("project list exceeded page limit for workspace; some projects may be missing",
 			"workspace", ws.Name, "count", len(resp.Projects.Edges))
 	}
 
-	var targets []ServiceTarget
+	var targets []types.ServiceTarget
 
 	for _, pe := range resp.Projects.Edges {
 		p := pe.Node
@@ -235,7 +237,7 @@ func (d *Discovery) discoverFromResponse(resp *railway.DiscoverAllResponse, ws W
 					continue
 				}
 
-				target := ServiceTarget{
+				target := types.ServiceTarget{
 					ProjectID:       p.Id,
 					ProjectName:     p.Name,
 					ServiceID:       inst.ServiceId,
@@ -262,7 +264,7 @@ func (d *Discovery) discoverFromResponse(resp *railway.DiscoverAllResponse, ws W
 
 // discoverWorkspace fetches all targets for a workspace using a single nested query.
 // Uses in-memory and bbolt caches with jittered TTLs.
-func (d *Discovery) discoverWorkspace(ctx context.Context, ws Workspace) ([]ServiceTarget, error) {
+func (d *Discovery) discoverWorkspace(ctx context.Context, ws Workspace) ([]types.ServiceTarget, error) {
 	// Check in-memory cache
 	d.wsTargetMu.Lock()
 	if cached, ok := d.wsTargetCache[ws.ID]; ok && !cached.expiredAt(d.clock.Now()) {
@@ -286,7 +288,7 @@ func (d *Discovery) discoverWorkspace(ctx context.Context, ws Workspace) ([]Serv
 				d.logger.Debug("loaded workspace discovery from persistent cache", "workspace", ws.Name,
 					"targets", len(persisted.Targets), "ttl", time.Until(persisted.ExpiresAt).Round(time.Second))
 				d.wsTargetMu.Lock()
-				d.wsTargetCache[ws.ID] = &cachedEntry[[]ServiceTarget]{
+				d.wsTargetCache[ws.ID] = &cachedEntry[[]types.ServiceTarget]{
 					data:      persisted.Targets,
 					expiresAt: persisted.ExpiresAt,
 				}
@@ -323,7 +325,7 @@ func (d *Discovery) discoverWorkspace(ctx context.Context, ws Workspace) ([]Serv
 		d.wsTargetMu.Unlock()
 		return existing.data, nil
 	}
-	d.wsTargetCache[ws.ID] = &cachedEntry[[]ServiceTarget]{
+	d.wsTargetCache[ws.ID] = &cachedEntry[[]types.ServiceTarget]{
 		data:      targets,
 		expiresAt: expiresAt,
 	}

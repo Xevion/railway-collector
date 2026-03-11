@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -21,7 +22,7 @@ func TestUsageGenerator_Type(t *testing.T) {
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
 		Logger: slog.Default(),
 	})
-	assert.Equal(t, collector.TaskTypeUsage, gen.Type())
+	assert.Equal(t, types.TaskTypeUsage, gen.Type())
 }
 
 func TestUsageGenerator_Poll_EmitsTwoItemsPerProject(t *testing.T) {
@@ -31,7 +32,7 @@ func TestUsageGenerator_Poll_EmitsTwoItemsPerProject(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		{ProjectID: "proj-2", ProjectName: "two", ServiceID: "svc-2", EnvironmentID: "env-2"},
 	})
@@ -48,27 +49,27 @@ func TestUsageGenerator_Poll_EmitsTwoItemsPerProject(t *testing.T) {
 	require.NotEmpty(t, items)
 
 	// Should have both QueryUsage and QueryEstimatedUsage for each project
-	kindCounts := make(map[collector.QueryKind]int)
-	projectUsage := make(map[string]map[collector.QueryKind]bool)
+	kindCounts := make(map[types.QueryKind]int)
+	projectUsage := make(map[string]map[types.QueryKind]bool)
 	for _, item := range items {
-		assert.Equal(t, collector.TaskTypeUsage, item.TaskType)
+		assert.Equal(t, types.TaskTypeUsage, item.TaskType)
 		kindCounts[item.Kind]++
 		if projectUsage[item.AliasKey] == nil {
-			projectUsage[item.AliasKey] = make(map[collector.QueryKind]bool)
+			projectUsage[item.AliasKey] = make(map[types.QueryKind]bool)
 		}
 		projectUsage[item.AliasKey][item.Kind] = true
 	}
 
 	// Two projects, two items each = 4 total
 	assert.Len(t, items, 4)
-	assert.Equal(t, 2, kindCounts[collector.QueryUsage])
-	assert.Equal(t, 2, kindCounts[collector.QueryEstimatedUsage])
+	assert.Equal(t, 2, kindCounts[types.QueryUsage])
+	assert.Equal(t, 2, kindCounts[types.QueryEstimatedUsage])
 
 	// Each project should have both kinds
-	assert.True(t, projectUsage["proj-1"][collector.QueryUsage])
-	assert.True(t, projectUsage["proj-1"][collector.QueryEstimatedUsage])
-	assert.True(t, projectUsage["proj-2"][collector.QueryUsage])
-	assert.True(t, projectUsage["proj-2"][collector.QueryEstimatedUsage])
+	assert.True(t, projectUsage["proj-1"][types.QueryUsage])
+	assert.True(t, projectUsage["proj-1"][types.QueryEstimatedUsage])
+	assert.True(t, projectUsage["proj-2"][types.QueryUsage])
+	assert.True(t, projectUsage["proj-2"][types.QueryEstimatedUsage])
 }
 
 func TestUsageGenerator_Poll_DefaultInterval(t *testing.T) {
@@ -78,7 +79,7 @@ func TestUsageGenerator_Poll_DefaultInterval(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
 
@@ -108,7 +109,7 @@ func TestUsageGenerator_Deliver_Usage(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -146,10 +147,10 @@ func TestUsageGenerator_Deliver_Usage(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "usage:proj-1",
-		Kind:     collector.QueryUsage,
-		TaskType: collector.TaskTypeUsage,
+		Kind:     types.QueryUsage,
+		TaskType: types.TaskTypeUsage,
 		AliasKey: "proj-1",
 	}
 
@@ -167,7 +168,7 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:   "proj-1",
 		ProjectName: "test-project",
 		ServiceID:   "svc-1",
@@ -199,10 +200,10 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "estimated-usage:proj-1",
-		Kind:     collector.QueryEstimatedUsage,
-		TaskType: collector.TaskTypeUsage,
+		Kind:     types.QueryEstimatedUsage,
+		TaskType: types.TaskTypeUsage,
 		AliasKey: "proj-1",
 	}
 
@@ -220,7 +221,7 @@ func TestUsageGenerator_Deliver_HandlesError(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	})
 
@@ -233,9 +234,9 @@ func TestUsageGenerator_Deliver_HandlesError(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "usage:proj-1",
-		Kind:     collector.QueryUsage,
+		Kind:     types.QueryUsage,
 		AliasKey: "proj-1",
 	}
 
@@ -247,7 +248,7 @@ func TestUsageGenerator_Deliver_EmptyResults(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
 
@@ -259,9 +260,9 @@ func TestUsageGenerator_Deliver_EmptyResults(t *testing.T) {
 	})
 
 	data, _ := json.Marshal([]map[string]any{})
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "usage:proj-1",
-		Kind:     collector.QueryUsage,
+		Kind:     types.QueryUsage,
 		AliasKey: "proj-1",
 	}
 

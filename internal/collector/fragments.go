@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
@@ -123,31 +124,31 @@ func estimateHttpMetricPoints(params map[string]any) int {
 	return int(durationSec) / stepSec
 }
 
-// FragmentFromWorkItem converts a WorkItem into a self-contained AliasFragment
+// FragmentFromWorkItem converts a types.WorkItem into a self-contained AliasFragment
 // with fully namespaced variables. The now parameter is used for estimating
 // data points on open-ended queries (no endDate).
-func FragmentFromWorkItem(item WorkItem, now time.Time) AliasFragment {
+func FragmentFromWorkItem(item types.WorkItem, now time.Time) AliasFragment {
 	nowFunc := func() time.Time { return now }
 	switch item.Kind {
-	case QueryMetrics:
+	case types.QueryMetrics:
 		return metricsFragment(item, nowFunc)
-	case QueryServiceMetrics:
+	case types.QueryServiceMetrics:
 		return serviceMetricsFragment(item, nowFunc)
-	case QueryReplicaMetrics:
+	case types.QueryReplicaMetrics:
 		return replicaMetricsFragment(item, nowFunc)
-	case QueryHttpDurationMetrics:
+	case types.QueryHttpDurationMetrics:
 		return httpDurationMetricsFragment(item)
-	case QueryHttpMetricsGroupedByStatus:
+	case types.QueryHttpMetricsGroupedByStatus:
 		return httpStatusMetricsFragment(item)
-	case QueryUsage:
+	case types.QueryUsage:
 		return usageFragment(item)
-	case QueryEstimatedUsage:
+	case types.QueryEstimatedUsage:
 		return estimatedUsageFragment(item)
-	case QueryEnvironmentLogs:
+	case types.QueryEnvironmentLogs:
 		return envLogsFragment(item)
-	case QueryBuildLogs:
+	case types.QueryBuildLogs:
 		return buildLogsFragment(item)
-	case QueryHttpLogs:
+	case types.QueryHttpLogs:
 		return httpLogsFragment(item)
 	default:
 		// Discovery and unknown types produce empty fragments.
@@ -155,7 +156,7 @@ func FragmentFromWorkItem(item WorkItem, now time.Time) AliasFragment {
 	}
 }
 
-func metricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
+func metricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
@@ -179,7 +180,7 @@ func metricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
 	}
 }
 
-func envLogsFragment(item WorkItem) AliasFragment {
+func envLogsFragment(item types.WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("environmentId", item.AliasKey)
@@ -199,7 +200,7 @@ func envLogsFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func buildLogsFragment(item WorkItem) AliasFragment {
+func buildLogsFragment(item types.WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_build"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
@@ -218,7 +219,7 @@ func buildLogsFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func httpLogsFragment(item WorkItem) AliasFragment {
+func httpLogsFragment(item types.WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_http"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("deploymentId", item.AliasKey)
@@ -238,7 +239,7 @@ func httpLogsFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func serviceMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
+func serviceMetricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_svcmetrics"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -263,7 +264,7 @@ func serviceMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragme
 	}
 }
 
-func replicaMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
+func replicaMetricsFragment(item types.WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_replica"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -287,7 +288,7 @@ func replicaMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragme
 	}
 }
 
-func httpDurationMetricsFragment(item WorkItem) AliasFragment {
+func httpDurationMetricsFragment(item types.WorkItem) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpdur"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -309,7 +310,7 @@ func httpDurationMetricsFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func httpStatusMetricsFragment(item WorkItem) AliasFragment {
+func httpStatusMetricsFragment(item types.WorkItem) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpstatus"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("serviceId", item.Params["serviceId"].(string))
@@ -331,7 +332,7 @@ func httpStatusMetricsFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func usageFragment(item WorkItem) AliasFragment {
+func usageFragment(item types.WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_usage"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)
@@ -352,7 +353,7 @@ func usageFragment(item WorkItem) AliasFragment {
 	}
 }
 
-func estimatedUsageFragment(item WorkItem) AliasFragment {
+func estimatedUsageFragment(item types.WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_estusage"
 	b := newFragmentBuilder(alias, item.Params)
 	b.addLiteral("projectId", item.AliasKey)

@@ -1,9 +1,11 @@
-package collector
+package coverage_test
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/xevion/railway-collector/internal/collector/coverage"
 )
 
 func TestCoverageKey(t *testing.T) {
@@ -20,7 +22,7 @@ func TestCoverageKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, CoverageKey(tt.parts...))
+			assert.Equal(t, tt.want, coverage.CoverageKey(tt.parts...))
 		})
 	}
 }

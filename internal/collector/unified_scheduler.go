@@ -11,13 +11,16 @@ import (
 
 	"github.com/jonboulle/clockwork"
 	"golang.org/x/time/rate"
+
+	"github.com/xevion/railway-collector/internal/collector/credit"
+	"github.com/xevion/railway-collector/internal/collector/types"
 )
 
 // UnifiedSchedulerConfig configures the unified credit-based scheduler.
 type UnifiedSchedulerConfig struct {
 	Clock      clockwork.Clock
 	API        RailwayAPI
-	Credits    *CreditAllocator
+	Credits    *credit.CreditAllocator
 	Generators []TaskGenerator
 	Logger     *slog.Logger
 
@@ -43,7 +46,7 @@ type UnifiedScheduler struct {
 	limiter *rate.Limiter
 
 	// generatorsByType provides quick lookup of generators by their TaskType.
-	generatorsByType map[TaskType]TaskGenerator
+	generatorsByType map[types.TaskType]TaskGenerator
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -64,7 +67,7 @@ func NewUnifiedScheduler(cfg UnifiedSchedulerConfig) *UnifiedScheduler {
 		cfg.DrainTimeout = 5 * time.Second
 	}
 
-	genByType := make(map[TaskType]TaskGenerator, len(cfg.Generators))
+	genByType := make(map[types.TaskType]TaskGenerator, len(cfg.Generators))
 	for _, g := range cfg.Generators {
 		genByType[g.Type()] = g
 	}
@@ -112,7 +115,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	now := s.cfg.Clock.Now()
 
 	// 1. Poll all generators for pending work.
-	var allItems []WorkItem
+	var allItems []types.WorkItem
 	// Track which generator produced each item for result delivery.
 	generatorMap := make(map[string]TaskGenerator)
 
@@ -136,10 +139,10 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	// 2. Handle discovery items separately (they use genqlient, not raw queries).
-	var queryItems []WorkItem
-	var discoveryItems []WorkItem
+	var queryItems []types.WorkItem
+	var discoveryItems []types.WorkItem
 	for _, item := range allItems {
-		if item.Kind == QueryDiscovery {
+		if item.Kind == types.QueryDiscovery {
 			discoveryItems = append(discoveryItems, item)
 		} else {
 			queryItems = append(queryItems, item)
@@ -148,7 +151,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 
 	// If we only have discovery items, handle them directly.
 	if len(queryItems) == 0 && len(discoveryItems) > 0 {
-		if !s.cfg.Credits.TryDeduct(TaskTypeDiscovery, now) {
+		if !s.cfg.Credits.TryDeduct(types.TaskTypeDiscovery, now) {
 			s.logIdleStatus(now)
 			return
 		}
@@ -173,7 +176,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	// 4. Try credit deduction. Walk fragments by priority, deduct credits for
 	//    each task type encountered, and collect credited fragments.
 	var credited []AliasFragment
-	deducted := make(map[TaskType]bool)
+	deducted := make(map[types.TaskType]bool)
 	var skippedTypes []string
 	for _, f := range fragments {
 		tt := f.Item.TaskType
@@ -192,11 +195,11 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	// Also try discovery if we have discovery items queued.
-	if len(discoveryItems) > 0 && s.cfg.Credits.TryDeduct(TaskTypeDiscovery, now) {
-		deducted[TaskTypeDiscovery] = true
+	if len(discoveryItems) > 0 && s.cfg.Credits.TryDeduct(types.TaskTypeDiscovery, now) {
+		deducted[types.TaskTypeDiscovery] = true
 	}
 
-	if len(credited) == 0 && !deducted[TaskTypeDiscovery] {
+	if len(credited) == 0 && !deducted[types.TaskTypeDiscovery] {
 		s.logIdleStatus(now)
 		return
 	}
@@ -212,7 +215,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 		)
 	}
 
-	if len(requests) == 0 && !deducted[TaskTypeDiscovery] {
+	if len(requests) == 0 && !deducted[types.TaskTypeDiscovery] {
 		s.logIdleStatus(now)
 		return
 	}
@@ -268,7 +271,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	}
 
 	// 7. Handle discovery if credited (piggyback on same tick after the queries).
-	if deducted[TaskTypeDiscovery] && len(discoveryItems) > 0 {
+	if deducted[types.TaskTypeDiscovery] && len(discoveryItems) > 0 {
 		s.handleDiscoveryItems(ctx, discoveryItems, generatorMap)
 	}
 }
@@ -281,8 +284,8 @@ type refresher interface {
 
 // handleDiscoveryItems executes discovery refresh via the generator's
 // Refresh method rather than building a raw query.
-func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []WorkItem, generatorMap map[string]TaskGenerator) {
-	gen, ok := s.generatorsByType[TaskTypeDiscovery]
+func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []types.WorkItem, generatorMap map[string]TaskGenerator) {
+	gen, ok := s.generatorsByType[types.TaskTypeDiscovery]
 	if !ok {
 		s.cfg.Logger.Error("discovery generator not found")
 		return
@@ -350,7 +353,7 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 // kindBreakdown returns a summary string of fragment counts by QueryKind,
 // e.g. "metrics:10 replicaMetrics:5 httpDurationMetrics:5".
 func kindBreakdown(fragments []AliasFragment) string {
-	counts := make(map[QueryKind]int)
+	counts := make(map[types.QueryKind]int)
 	for _, f := range fragments {
 		counts[f.Item.Kind]++
 	}

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
@@ -32,7 +34,7 @@ func buildCoverageSummaries(
 	var summaries []coverageSummary
 
 	for _, e := range entries {
-		var intervals []collector.CoverageInterval
+		var intervals []coverage.CoverageInterval
 		if err := json.Unmarshal(e.Value, &intervals); err != nil {
 			continue
 		}
@@ -43,15 +45,15 @@ func buildCoverageSummaries(
 		for _, iv := range intervals {
 			dur := iv.End.Sub(iv.Start)
 			switch iv.Kind {
-			case collector.CoverageCollected:
+			case coverage.CoverageCollected:
 				s.Collected += dur
-			case collector.CoverageEmpty:
+			case coverage.CoverageEmpty:
 				s.Empty += dur
 			}
 		}
 
 		// Find gaps using the window-aware FindGaps function
-		gaps := collector.FindGaps(intervals, windowStart, windowEnd)
+		gaps := coverage.FindGaps(intervals, windowStart, windowEnd)
 		s.GapCount = len(gaps)
 		for _, g := range gaps {
 			d := g.Duration()
@@ -127,13 +129,13 @@ func buildNameResolver(reader interface {
 // coverageTypeSuffixes lists known coverage type suffixes, longest first
 // to avoid partial matches (e.g. ":metric" matching ":service-metric").
 var coverageTypeSuffixes = []string{
-	":" + collector.CoverageTypeServiceMetric,
-	":" + collector.CoverageTypeReplicaMetric,
-	":" + collector.CoverageTypeHTTPMetric,
-	":" + collector.CoverageTypeLogEnv,
-	":" + collector.CoverageTypeLogBuild,
-	":" + collector.CoverageTypeLogHTTP,
-	":" + collector.CoverageTypeMetric,
+	":" + coverage.CoverageTypeServiceMetric,
+	":" + coverage.CoverageTypeReplicaMetric,
+	":" + coverage.CoverageTypeHTTPMetric,
+	":" + coverage.CoverageTypeLogEnv,
+	":" + coverage.CoverageTypeLogBuild,
+	":" + coverage.CoverageTypeLogHTTP,
+	":" + coverage.CoverageTypeMetric,
 }
 
 // resolveKey translates IDs in a coverage key to human-readable names.
@@ -199,12 +201,12 @@ func parseCoverageSegments(key string) []string {
 // extractDiscoveryTargets reads the discovery cache and returns all service targets.
 func extractDiscoveryTargets(reader interface {
 	DiscoveryEntries() ([]state.RawEntry, error)
-}) []collector.ServiceTarget {
+}) []types.ServiceTarget {
 	entries, err := reader.DiscoveryEntries()
 	if err != nil {
 		return nil
 	}
-	var targets []collector.ServiceTarget
+	var targets []types.ServiceTarget
 	for _, e := range entries {
 		var cached collector.PersistedWorkspaceDiscovery
 		if err := json.Unmarshal(e.Value, &cached); err != nil {
@@ -217,7 +219,7 @@ func extractDiscoveryTargets(reader interface {
 
 // expectedCoverageKeys builds the set of coverage keys that should exist based on
 // which generators are enabled in the config and what targets exist in discovery.
-func expectedCoverageKeys(cfg *config.Config, targets []collector.ServiceTarget) map[string]struct{} {
+func expectedCoverageKeys(cfg *config.Config, targets []types.ServiceTarget) map[string]struct{} {
 	keys := make(map[string]struct{})
 
 	// Deduplicate project IDs for project-level metrics
@@ -244,21 +246,21 @@ func expectedCoverageKeys(cfg *config.Config, targets []collector.ServiceTarget)
 
 	if cfg.Collect.Metrics.Enabled {
 		for pid := range seenProjects {
-			keys[collector.CoverageKey(pid, collector.CoverageTypeMetric)] = struct{}{}
+			keys[coverage.CoverageKey(pid, coverage.CoverageTypeMetric)] = struct{}{}
 		}
 		if cfg.Collect.Metrics.Service.Enabled {
 			for ck := range seenComposite {
-				keys[collector.CoverageKey(ck, collector.CoverageTypeServiceMetric)] = struct{}{}
+				keys[coverage.CoverageKey(ck, coverage.CoverageTypeServiceMetric)] = struct{}{}
 			}
 		}
 		if cfg.Collect.Metrics.Replica.Enabled {
 			for ck := range seenComposite {
-				keys[collector.CoverageKey(ck, collector.CoverageTypeReplicaMetric)] = struct{}{}
+				keys[coverage.CoverageKey(ck, coverage.CoverageTypeReplicaMetric)] = struct{}{}
 			}
 		}
 		if cfg.Collect.Metrics.HTTP.Enabled {
 			for ck := range seenComposite {
-				keys[collector.CoverageKey(ck, collector.CoverageTypeHTTPMetric)] = struct{}{}
+				keys[coverage.CoverageKey(ck, coverage.CoverageTypeHTTPMetric)] = struct{}{}
 			}
 		}
 	}
@@ -271,17 +273,17 @@ func expectedCoverageKeys(cfg *config.Config, targets []collector.ServiceTarget)
 		}
 		if _, ok := logTypes["deployment"]; ok {
 			for envID := range seenEnvs {
-				keys[collector.CoverageKey(envID, collector.CoverageTypeLogEnv)] = struct{}{}
+				keys[coverage.CoverageKey(envID, coverage.CoverageTypeLogEnv)] = struct{}{}
 			}
 		}
 		if _, ok := logTypes["build"]; ok {
 			for depID := range seenDeployments {
-				keys[collector.CoverageKey(depID, collector.CoverageTypeLogBuild)] = struct{}{}
+				keys[coverage.CoverageKey(depID, coverage.CoverageTypeLogBuild)] = struct{}{}
 			}
 		}
 		if _, ok := logTypes["http"]; ok {
 			for depID := range seenDeployments {
-				keys[collector.CoverageKey(depID, collector.CoverageTypeLogHTTP)] = struct{}{}
+				keys[coverage.CoverageKey(depID, coverage.CoverageTypeLogHTTP)] = struct{}{}
 			}
 		}
 	}

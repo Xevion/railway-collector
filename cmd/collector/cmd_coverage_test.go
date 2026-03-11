@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
@@ -73,7 +74,7 @@ func formatSummaryRows(summaries []coverageSummary) (headers []string, rows [][]
 }
 
 // makeEntry builds a RawEntry with JSON-encoded CoverageIntervals.
-func makeEntry(t *testing.T, key string, intervals []collector.CoverageInterval) state.RawEntry {
+func makeEntry(t *testing.T, key string, intervals []coverage.CoverageInterval) state.RawEntry {
 	t.Helper()
 	data, err := json.Marshal(intervals)
 	require.NoError(t, err)
@@ -88,16 +89,16 @@ func TestCoverage_GapCounting(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 10, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 			{
 				Start: time.Date(2025, 1, 1, 0, 40, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 50, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 		}),
 	}
@@ -122,16 +123,16 @@ func TestCoverage_GapCounting_WithEmptyIntervals(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 			{
 				Start: time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 40, 0, 0, time.UTC),
-				Kind:  collector.CoverageEmpty,
+				Kind:  coverage.CoverageEmpty,
 			},
 		}),
 	}
@@ -154,11 +155,11 @@ func TestCoverage_LargestGap_NoGaps(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 			{
 				Start: windowStart,
 				End:   windowEnd,
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 		}),
 	}
@@ -183,16 +184,16 @@ func TestCoverage_LargestGap_WithGaps(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 10, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 			{
 				Start: time.Date(2025, 1, 1, 0, 40, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 50, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 		}),
 	}
@@ -210,7 +211,7 @@ func TestCoverage_LargestGap_NoCoverage(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{}),
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{}),
 	}
 
 	noopResolver := func(id string) string { return id }
@@ -229,14 +230,14 @@ func TestCoverage_KeyResolution(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "uuid-1:metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "uuid-1:metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
-		makeEntry(t, "uuid-2:log:environment", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "uuid-2:log:environment", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
-		makeEntry(t, "uuid-3:log:build", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "uuid-3:log:build", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
 	}
 
@@ -275,14 +276,14 @@ func TestCoverage_KeyResolution_CompositeKeys(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "svc-1:env-1:service-metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "svc-1:env-1:service-metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
-		makeEntry(t, "svc-1:env-1:replica-metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "svc-1:env-1:replica-metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
-		makeEntry(t, "svc-2:env-1:http-metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "svc-2:env-1:http-metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
 	}
 
@@ -318,8 +319,8 @@ func TestCoverage_KeyResolution_UnknownID(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	entries := []state.RawEntry{
-		makeEntry(t, "unknown-uuid:metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "unknown-uuid:metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
 	}
 
@@ -334,17 +335,17 @@ func TestCoverage_KeyResolution_UnknownID(t *testing.T) {
 func TestCoverage_Percentage(t *testing.T) {
 	tests := []struct {
 		name      string
-		intervals []collector.CoverageInterval
+		intervals []coverage.CoverageInterval
 		wantPct   float64
 		tolerance float64
 	}{
 		{
 			name: "full coverage",
-			intervals: []collector.CoverageInterval{
+			intervals: []coverage.CoverageInterval{
 				{
 					Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC),
-					Kind:  collector.CoverageCollected,
+					Kind:  coverage.CoverageCollected,
 				},
 			},
 			wantPct:   100.0,
@@ -352,22 +353,22 @@ func TestCoverage_Percentage(t *testing.T) {
 		},
 		{
 			name:      "no coverage",
-			intervals: []collector.CoverageInterval{},
+			intervals: []coverage.CoverageInterval{},
 			wantPct:   0.0,
 			tolerance: 0.01,
 		},
 		{
 			name: "half collected half empty",
-			intervals: []collector.CoverageInterval{
+			intervals: []coverage.CoverageInterval{
 				{
 					Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-					Kind:  collector.CoverageCollected,
+					Kind:  coverage.CoverageCollected,
 				},
 				{
 					Start: time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC),
-					Kind:  collector.CoverageEmpty,
+					Kind:  coverage.CoverageEmpty,
 				},
 			},
 			wantPct:   50.0,
@@ -376,11 +377,11 @@ func TestCoverage_Percentage(t *testing.T) {
 		{
 			name: "collected plus gap",
 			// 20 min collected, 40 min gap => 20/(20+0+40) = 33.33%
-			intervals: []collector.CoverageInterval{
+			intervals: []coverage.CoverageInterval{
 				{
 					Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
-					Kind:  collector.CoverageCollected,
+					Kind:  coverage.CoverageCollected,
 				},
 			},
 			wantPct:   33.33,
@@ -390,16 +391,16 @@ func TestCoverage_Percentage(t *testing.T) {
 			name: "mixed collected empty and gap",
 			// 15 min collected + 15 min empty + 30 min gap = 60 min window
 			// percentage = 15/60 = 25%
-			intervals: []collector.CoverageInterval{
+			intervals: []coverage.CoverageInterval{
 				{
 					Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 0, 15, 0, 0, time.UTC),
-					Kind:  collector.CoverageCollected,
+					Kind:  coverage.CoverageCollected,
 				},
 				{
 					Start: time.Date(2025, 1, 1, 0, 15, 0, 0, time.UTC),
 					End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-					Kind:  collector.CoverageEmpty,
+					Kind:  coverage.CoverageEmpty,
 				},
 			},
 			wantPct:   25.0,
@@ -430,24 +431,24 @@ func TestCoverage_SummaryTotalRow(t *testing.T) {
 
 	entries := []state.RawEntry{
 		// Entry 1: 30 min collected, 0 empty, 30 min gap
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 		}),
 		// Entry 2: 15 min collected, 15 min empty, 30 min gap
-		makeEntry(t, "proj-2:metric", []collector.CoverageInterval{
+		makeEntry(t, "proj-2:metric", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 15, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 			{
 				Start: time.Date(2025, 1, 1, 0, 15, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-				Kind:  collector.CoverageEmpty,
+				Kind:  coverage.CoverageEmpty,
 			},
 		}),
 	}
@@ -557,17 +558,17 @@ func TestCoverage_MultipleEntries(t *testing.T) {
 
 	entries := []state.RawEntry{
 		// Full coverage
-		makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
-			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 		}),
 		// No coverage
-		makeEntry(t, "proj-2:log:environment", []collector.CoverageInterval{}),
+		makeEntry(t, "proj-2:log:environment", []coverage.CoverageInterval{}),
 		// Partial coverage
-		makeEntry(t, "proj-3:log:build", []collector.CoverageInterval{
+		makeEntry(t, "proj-3:log:build", []coverage.CoverageInterval{
 			{
 				Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 				End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-				Kind:  collector.CoverageCollected,
+				Kind:  coverage.CoverageCollected,
 			},
 		}),
 	}
@@ -628,8 +629,8 @@ func TestParseCoverageSegments(t *testing.T) {
 }
 
 // testTargets returns the standard 3-target set used across expectedCoverageKeys tests.
-func testTargets() []collector.ServiceTarget {
-	return []collector.ServiceTarget{
+func testTargets() []types.ServiceTarget {
+	return []types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"},
 		{ProjectID: "proj-1", ServiceID: "svc-2", EnvironmentID: "env-1", DeploymentID: "dep-2"},
 		{ProjectID: "proj-2", ServiceID: "svc-3", EnvironmentID: "env-2", DeploymentID: ""},
@@ -800,16 +801,16 @@ func TestCoverage_SyntheticEntriesAppear(t *testing.T) {
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
 	// Real entry with 30 min of coverage
-	realEntry := makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+	realEntry := makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
 		{
 			Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 			End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
-			Kind:  collector.CoverageCollected,
+			Kind:  coverage.CoverageCollected,
 		},
 	})
 
 	// Synthetic entry with empty intervals (represents a key with no data)
-	emptyJSON, err := json.Marshal([]collector.CoverageInterval{})
+	emptyJSON, err := json.Marshal([]coverage.CoverageInterval{})
 	require.NoError(t, err)
 	syntheticEntry := state.RawEntry{Key: "svc-1:env-1:service-metric", Value: emptyJSON}
 
@@ -839,6 +840,6 @@ func TestCoverage_SyntheticEntriesAppear(t *testing.T) {
 }
 
 func TestCompositeKey(t *testing.T) {
-	target := collector.ServiceTarget{ServiceID: "svc-1", EnvironmentID: "env-1"}
+	target := types.ServiceTarget{ServiceID: "svc-1", EnvironmentID: "env-1"}
 	assert.Equal(t, "svc-1:env-1", target.CompositeKey())
 }

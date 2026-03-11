@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/sink"
 	"go.uber.org/mock/gomock"
@@ -20,7 +21,7 @@ func TestLogsGenerator_Type(t *testing.T) {
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
 		Logger: slog.Default(),
 	})
-	assert.Equal(t, collector.TaskTypeLogs, gen.Type())
+	assert.Equal(t, types.TaskTypeLogs, gen.Type())
 }
 
 func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
@@ -31,7 +32,7 @@ func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -65,13 +66,13 @@ func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
 	hasHTTPLogs := false
 	for _, item := range items {
 		switch item.Kind {
-		case collector.QueryEnvironmentLogs:
+		case types.QueryEnvironmentLogs:
 			hasEnvLogs = true
 			assert.Equal(t, "env-1", item.AliasKey)
-		case collector.QueryBuildLogs:
+		case types.QueryBuildLogs:
 			hasBuildLogs = true
 			assert.Equal(t, "dep-1", item.AliasKey)
-		case collector.QueryHttpLogs:
+		case types.QueryHttpLogs:
 			hasHTTPLogs = true
 			assert.Equal(t, "dep-1", item.AliasKey)
 		}
@@ -89,7 +90,7 @@ func TestLogsGenerator_Poll_RespectsInterval(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID: "proj-1", ServiceID: "svc-1",
 		EnvironmentID: "env-1", DeploymentID: "dep-1",
 	}}).AnyTimes()
@@ -126,7 +127,7 @@ func TestLogsGenerator_Poll_DeduplicatesEnvironments(t *testing.T) {
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
 	// Two services in the same environment
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"},
 		{ProjectID: "proj-1", ServiceID: "svc-2", EnvironmentID: "env-1", DeploymentID: "dep-2"},
 	})
@@ -150,7 +151,7 @@ func TestLogsGenerator_Poll_DeduplicatesEnvironments(t *testing.T) {
 	// Should have env log items for env-1 only (deduplicated)
 	envLogItems := 0
 	for _, item := range items {
-		if item.Kind == collector.QueryEnvironmentLogs {
+		if item.Kind == types.QueryEnvironmentLogs {
 			envLogItems++
 			assert.Equal(t, "env-1", item.AliasKey)
 		}
@@ -165,7 +166,7 @@ func TestLogsGenerator_Poll_SkipsNoDeployment(t *testing.T) {
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
 	// Target without deployment ID
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: ""},
 	})
 
@@ -253,7 +254,7 @@ func TestLogsGenerator_Poll_GapChunking(t *testing.T) {
 			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 			now := fakeClock.Now()
 
-			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+			targets.EXPECT().Targets().Return([]types.ServiceTarget{
 				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 			})
 			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -303,7 +304,7 @@ func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
 	afterDate := fakeClock.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -350,10 +351,10 @@ func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "envlogs:env-1",
-		Kind:     collector.QueryEnvironmentLogs,
-		TaskType: collector.TaskTypeLogs,
+		Kind:     types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs,
 		AliasKey: "env-1",
 		Params: map[string]any{
 			"afterDate": afterDate,
@@ -378,7 +379,7 @@ func TestLogsGenerator_Deliver_BuildLogs(t *testing.T) {
 
 	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID: "proj-1", ProjectName: "test-project",
 		ServiceID: "svc-1", ServiceName: "test-service",
 		EnvironmentID: "env-1", EnvironmentName: "production",
@@ -419,9 +420,9 @@ func TestLogsGenerator_Deliver_BuildLogs(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
-		ID: "buildlogs:dep-1", Kind: collector.QueryBuildLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "dep-1",
+	item := types.WorkItem{
+		ID: "buildlogs:dep-1", Kind: types.QueryBuildLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "dep-1",
 		Params: map[string]any{
 			"startDate": startDate,
 		},
@@ -445,7 +446,7 @@ func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
 	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
 	startDate := fakeClock.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID: "proj-1", ProjectName: "test-project",
 		ServiceID: "svc-1", ServiceName: "test-service",
 		EnvironmentID: "env-1", EnvironmentName: "production",
@@ -493,9 +494,9 @@ func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
-		ID: "httplogs:dep-1", Kind: collector.QueryHttpLogs,
-		TaskType: collector.TaskTypeLogs, AliasKey: "dep-1",
+	item := types.WorkItem{
+		ID: "httplogs:dep-1", Kind: types.QueryHttpLogs,
+		TaskType: types.TaskTypeLogs, AliasKey: "dep-1",
 		Params: map[string]any{
 			"startDate": startDate,
 		},
@@ -529,8 +530,8 @@ func TestLogsGenerator_Deliver_HandlesError(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	item := collector.WorkItem{
-		ID: "envlogs:env-1", Kind: collector.QueryEnvironmentLogs,
+	item := types.WorkItem{
+		ID: "envlogs:env-1", Kind: types.QueryEnvironmentLogs,
 		AliasKey: "env-1",
 	}
 

@@ -16,6 +16,7 @@ import (
 	slogformatter "github.com/samber/slog-formatter"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/credit"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
@@ -158,7 +159,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	now := realClock.Now()
 
 	// Build credit allocator from config
-	credits := collector.NewCreditAllocator(cfg.Collect.Credits, now, logger)
+	credits := credit.NewCreditAllocator(cfg.Collect.Credits, now, logger)
 
 	// Build generators
 	var generators []collector.TaskGenerator

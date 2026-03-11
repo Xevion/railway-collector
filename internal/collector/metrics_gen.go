@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
 	"strings"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
@@ -34,7 +35,7 @@ type rawMetricsTags struct {
 
 // buildMetricLabels builds metric labels from raw JSON tags, enriching with
 // target names where possible.
-func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
+func buildMetricLabels(tags rawMetricsTags, targets []types.ServiceTarget) map[string]string {
 	labels := make(map[string]string)
 
 	if tags.ProjectID != nil {
@@ -107,9 +108,9 @@ func NewProjectMetricsGenerator(cfg ProjectMetricsGeneratorConfig) *ProjectMetri
 	}
 }
 
-// Type returns TaskTypeMetrics.
-func (g *ProjectMetricsGenerator) Type() TaskType {
-	return TaskTypeMetrics
+// Type returns types.TaskTypeMetrics.
+func (g *ProjectMetricsGenerator) Type() types.TaskType {
+	return types.TaskTypeMetrics
 }
 
 // NextPoll returns the earliest time this generator will produce work.
@@ -123,17 +124,17 @@ func alignToChunkBoundary(t time.Time, chunkSize time.Duration) time.Time {
 }
 
 // alignedChunks splits a gap into chunks aligned to fixed boundaries.
-func alignedChunks(gap TimeRange, chunkSize time.Duration) []TimeRange {
+func alignedChunks(gap coverage.TimeRange, chunkSize time.Duration) []coverage.TimeRange {
 	alignedStart := alignToChunkBoundary(gap.Start, chunkSize)
 
-	var chunks []TimeRange
+	var chunks []coverage.TimeRange
 	cursor := alignedStart
 	for cursor.Before(gap.End) {
 		end := cursor.Add(chunkSize)
 		if end.After(gap.End) {
 			end = gap.End
 		}
-		chunks = append(chunks, TimeRange{Start: cursor, End: end})
+		chunks = append(chunks, coverage.TimeRange{Start: cursor, End: end})
 		cursor = cursor.Add(chunkSize)
 	}
 	return chunks
@@ -142,7 +143,7 @@ func alignedChunks(gap TimeRange, chunkSize time.Duration) []TimeRange {
 // Poll scans coverage gaps for all projects, prioritizes by recency (live edge
 // first), and returns WorkItems. The live edge gets an open-ended query (no
 // endDate); older gaps are chunked into fixed intervals for batching.
-func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
+func (g *ProjectMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
 		railway.MetricTagEnvironmentId,
@@ -159,19 +160,19 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 		nextPoll:        g.nextPoll,
 		itemsPerEmit:    1,
 		logPrefix:       "metric",
-		entities: func(targets []ServiceTarget) []pollEntity {
+		entities: func(targets []types.ServiceTarget) []pollEntity {
 			pids := uniqueProjectIDs(targets)
 			entities := make([]pollEntity, len(pids))
 			for i, pid := range pids {
 				entities[i] = pollEntity{
 					Key:          pid,
-					CoverageType: CoverageTypeMetric,
+					CoverageType: coverage.CoverageTypeMetric,
 					LogAttrs:     []any{"project_id", pid},
 				}
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk TimeRange, isLiveEdge bool) []WorkItem {
+		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
 			pid := entity.Key
 			params := map[string]any{
 				"startDate":              chunk.Start.Format(time.RFC3339),
@@ -185,10 +186,10 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 				params["endDate"] = chunk.End.Format(time.RFC3339)
 				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
 			}
-			return []WorkItem{{
+			return []types.WorkItem{{
 				ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
-				Kind:     QueryMetrics,
-				TaskType: TaskTypeMetrics,
+				Kind:     types.QueryMetrics,
+				TaskType: types.TaskTypeMetrics,
 				AliasKey: pid,
 				BatchKey: batchKey,
 				Params:   params,
@@ -206,7 +207,7 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 // Deliver processes the raw metrics JSON response for a single project.
 // It transforms the data into MetricPoints, writes to sinks, and updates
 // coverage. Coverage is the single source of truth (no cursors).
-func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item types.WorkItem, data json.RawMessage, err error) {
 	projectID := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
@@ -246,7 +247,7 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		covKey := CoverageKey(projectID, CoverageTypeMetric)
+		covKey := coverage.CoverageKey(projectID, coverage.CoverageTypeMetric)
 		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
 			g.logger.Warn("failed to update metric coverage",
 				"project", projectName, "project_id", projectID, "error", covErr)
@@ -288,7 +289,7 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 // buildLabelsFromRaw builds metric labels from raw JSON tags,
 // enriching with target names where possible.
-func (g *ProjectMetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
+func (g *ProjectMetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []types.ServiceTarget) map[string]string {
 	return buildMetricLabels(tags, targets)
 }
 

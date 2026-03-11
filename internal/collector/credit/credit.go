@@ -1,10 +1,11 @@
-package collector
+package credit
 
 import (
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/logging"
 )
@@ -87,7 +88,7 @@ func (p *creditPool) setRate(creditsPerMinute float64) {
 // rate limit conditions.
 type CreditAllocator struct {
 	mu     sync.Mutex
-	pools  map[TaskType]*creditPool
+	pools  map[types.TaskType]*creditPool
 	config config.CreditsConfig
 	regime Regime
 	logger *slog.Logger
@@ -96,11 +97,11 @@ type CreditAllocator struct {
 // NewCreditAllocator creates a new allocator with default credit pools.
 func NewCreditAllocator(cfg config.CreditsConfig, now time.Time, logger *slog.Logger) *CreditAllocator {
 	return &CreditAllocator{
-		pools: map[TaskType]*creditPool{
-			TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),
-			TaskTypeLogs:      newCreditPool(cfg.LogsRate, cfg.MaxCredits, now),
-			TaskTypeDiscovery: newCreditPool(cfg.DiscoveryRate, cfg.MaxCredits, now),
-			TaskTypeUsage:     newCreditPool(cfg.UsageRate, cfg.MaxCredits, now),
+		pools: map[types.TaskType]*creditPool{
+			types.TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),
+			types.TaskTypeLogs:      newCreditPool(cfg.LogsRate, cfg.MaxCredits, now),
+			types.TaskTypeDiscovery: newCreditPool(cfg.DiscoveryRate, cfg.MaxCredits, now),
+			types.TaskTypeUsage:     newCreditPool(cfg.UsageRate, cfg.MaxCredits, now),
 		},
 		config: cfg,
 		regime: RegimeAbundant,
@@ -109,7 +110,7 @@ func NewCreditAllocator(cfg config.CreditsConfig, now time.Time, logger *slog.Lo
 }
 
 // TryDeduct attempts to deduct one credit from the given task type.
-func (ca *CreditAllocator) TryDeduct(taskType TaskType, now time.Time) bool {
+func (ca *CreditAllocator) TryDeduct(taskType types.TaskType, now time.Time) bool {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
@@ -121,7 +122,7 @@ func (ca *CreditAllocator) TryDeduct(taskType TaskType, now time.Time) bool {
 }
 
 // Available returns the current credit balance for a task type.
-func (ca *CreditAllocator) Available(taskType TaskType, now time.Time) float64 {
+func (ca *CreditAllocator) Available(taskType types.TaskType, now time.Time) float64 {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
@@ -186,21 +187,21 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 		}
 	case RegimeScarce:
 		// Reduced rates under pressure
-		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate * 0.5)
-		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate * 0.5)
-		ca.pools[TaskTypeDiscovery].setRate(0)
-		ca.pools[TaskTypeUsage].setRate(0) // usage can wait
+		ca.pools[types.TaskTypeMetrics].setRate(ca.config.MetricsRate * 0.5)
+		ca.pools[types.TaskTypeLogs].setRate(ca.config.LogsRate * 0.5)
+		ca.pools[types.TaskTypeDiscovery].setRate(0)
+		ca.pools[types.TaskTypeUsage].setRate(0) // usage can wait
 	case RegimeNormal:
 		// Full rate, discovery scaled
-		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
-		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
-		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
-		ca.pools[TaskTypeUsage].setRate(ca.config.UsageRate)
+		ca.pools[types.TaskTypeMetrics].setRate(ca.config.MetricsRate)
+		ca.pools[types.TaskTypeLogs].setRate(ca.config.LogsRate)
+		ca.pools[types.TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
+		ca.pools[types.TaskTypeUsage].setRate(ca.config.UsageRate)
 	case RegimeAbundant:
 		// Full rate for everything
-		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
-		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
-		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
-		ca.pools[TaskTypeUsage].setRate(ca.config.UsageRate)
+		ca.pools[types.TaskTypeMetrics].setRate(ca.config.MetricsRate)
+		ca.pools[types.TaskTypeLogs].setRate(ca.config.LogsRate)
+		ca.pools[types.TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
+		ca.pools[types.TaskTypeUsage].setRate(ca.config.UsageRate)
 	}
 }

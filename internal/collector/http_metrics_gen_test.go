@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/sink"
 	"go.uber.org/mock/gomock"
@@ -20,7 +21,7 @@ func TestHttpMetricsGenerator_Type(t *testing.T) {
 	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
 		Logger: slog.Default(),
 	})
-	assert.Equal(t, collector.TaskTypeMetrics, gen.Type())
+	assert.Equal(t, types.TaskTypeMetrics, gen.Type())
 }
 
 func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
@@ -31,7 +32,7 @@ func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 	})
 
@@ -53,13 +54,13 @@ func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
 	require.NotEmpty(t, items)
 
 	// Should have both QueryHttpDurationMetrics and QueryHttpMetricsGroupedByStatus
-	kindCounts := make(map[collector.QueryKind]int)
+	kindCounts := make(map[types.QueryKind]int)
 	for _, item := range items {
 		kindCounts[item.Kind]++
-		assert.Equal(t, collector.TaskTypeMetrics, item.TaskType)
+		assert.Equal(t, types.TaskTypeMetrics, item.TaskType)
 	}
-	assert.Greater(t, kindCounts[collector.QueryHttpDurationMetrics], 0, "should have duration items")
-	assert.Greater(t, kindCounts[collector.QueryHttpMetricsGroupedByStatus], 0, "should have status items")
+	assert.Greater(t, kindCounts[types.QueryHttpDurationMetrics], 0, "should have duration items")
+	assert.Greater(t, kindCounts[types.QueryHttpMetricsGroupedByStatus], 0, "should have status items")
 }
 
 func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
@@ -70,7 +71,7 @@ func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	})
 
@@ -157,7 +158,7 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 			now := fakeClock.Now()
 
-			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+			targets.EXPECT().Targets().Return([]types.ServiceTarget{
 				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 			})
 			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -184,12 +185,12 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 			}
 
 			// Verify we get both kinds
-			kindCounts := make(map[collector.QueryKind]int)
+			kindCounts := make(map[types.QueryKind]int)
 			for _, item := range items {
 				kindCounts[item.Kind]++
 			}
-			assert.Greater(t, kindCounts[collector.QueryHttpDurationMetrics], 0, "should have duration items")
-			assert.Greater(t, kindCounts[collector.QueryHttpMetricsGroupedByStatus], 0, "should have status items")
+			assert.Greater(t, kindCounts[types.QueryHttpDurationMetrics], 0, "should have duration items")
+			assert.Greater(t, kindCounts[types.QueryHttpMetricsGroupedByStatus], 0, "should have status items")
 
 			if tt.wantTotalCapped {
 				assert.LessOrEqual(t, len(items), tt.maxItems, "output should be capped at maxItems")
@@ -206,7 +207,7 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -252,10 +253,10 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "http-duration:svc-1:env-1",
-		Kind:     collector.QueryHttpDurationMetrics,
-		TaskType: collector.TaskTypeMetrics,
+		Kind:     types.QueryHttpDurationMetrics,
+		TaskType: types.TaskTypeMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -299,7 +300,7 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -343,10 +344,10 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 	data, err := json.Marshal(rawData)
 	require.NoError(t, err)
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "http-status:svc-1:env-1",
-		Kind:     collector.QueryHttpMetricsGroupedByStatus,
-		TaskType: collector.TaskTypeMetrics,
+		Kind:     types.QueryHttpMetricsGroupedByStatus,
+		TaskType: types.TaskTypeMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -378,7 +379,7 @@ func TestHttpMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"},
 	})
 
@@ -392,9 +393,9 @@ func TestHttpMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "http-duration:svc-1:env-1",
-		Kind:     collector.QueryHttpDurationMetrics,
+		Kind:     types.QueryHttpDurationMetrics,
 		AliasKey: "svc-1:env-1",
 	}
 
@@ -409,7 +410,7 @@ func TestHttpMetricsGenerator_Deliver_EmptyDurationResults(t *testing.T) {
 
 	now := fakeClock.Now()
 
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+	targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 	}).AnyTimes()
 
@@ -428,9 +429,9 @@ func TestHttpMetricsGenerator_Deliver_EmptyDurationResults(t *testing.T) {
 
 	// Empty duration response
 	data, _ := json.Marshal(map[string]any{"samples": []map[string]any{}})
-	item := collector.WorkItem{
+	item := types.WorkItem{
 		ID:       "http-duration:svc-1:env-1",
-		Kind:     collector.QueryHttpDurationMetrics,
+		Kind:     types.QueryHttpDurationMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
 			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),

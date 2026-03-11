@@ -10,7 +10,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/xevion/railway-collector/internal/cli"
-	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/collector/coverage"
 	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
@@ -58,19 +58,19 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 	if cmd.Project != "" {
 		var filtered []struct {
 			key       string
-			intervals []collector.CoverageInterval
+			intervals []coverage.CoverageInterval
 		}
 		for _, e := range entries {
 			if e.Key != cmd.Project && !strings.HasPrefix(e.Key, cmd.Project+":") {
 				continue
 			}
-			var intervals []collector.CoverageInterval
+			var intervals []coverage.CoverageInterval
 			if err := json.Unmarshal(e.Value, &intervals); err != nil {
 				return fmt.Errorf("parsing coverage for %s: %w", e.Key, err)
 			}
 			filtered = append(filtered, struct {
 				key       string
-				intervals []collector.CoverageInterval
+				intervals []coverage.CoverageInterval
 			}{e.Key, intervals})
 		}
 		if len(filtered) == 0 {
@@ -145,7 +145,7 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 	for _, e := range entries {
 		actualKeys[e.Key] = struct{}{}
 	}
-	emptyIntervals, _ := json.Marshal([]collector.CoverageInterval{})
+	emptyIntervals, _ := json.Marshal([]coverage.CoverageInterval{})
 	for key := range expected {
 		if _, exists := actualKeys[key]; !exists {
 			entries = append(entries, state.RawEntry{Key: key, Value: emptyIntervals})
@@ -208,7 +208,7 @@ func (cmd *CoverageCmd) renderIntervals(c *CLI, f *cli.Formatter, entries []stat
 	if c.JSON {
 		var jsonOut []coverageIntervalJSON
 		for _, e := range entries {
-			var intervals []collector.CoverageInterval
+			var intervals []coverage.CoverageInterval
 			if err := json.Unmarshal(e.Value, &intervals); err != nil {
 				continue
 			}
@@ -229,7 +229,7 @@ func (cmd *CoverageCmd) renderIntervals(c *CLI, f *cli.Formatter, entries []stat
 	headers := []string{"Key", "Start", "End", "Duration", "Kind", "Resolution"}
 	var rows [][]string
 	for _, e := range entries {
-		var intervals []collector.CoverageInterval
+		var intervals []coverage.CoverageInterval
 		if err := json.Unmarshal(e.Value, &intervals); err != nil {
 			continue
 		}
@@ -252,11 +252,11 @@ func (cmd *CoverageCmd) renderIntervals(c *CLI, f *cli.Formatter, entries []stat
 	return nil
 }
 
-func coverageKindStr(k collector.CoverageKind) string {
+func coverageKindStr(k coverage.CoverageKind) string {
 	switch k {
-	case collector.CoverageCollected:
+	case coverage.CoverageCollected:
 		return "collected"
-	case collector.CoverageEmpty:
+	case coverage.CoverageEmpty:
 		return "empty"
 	default:
 		return fmt.Sprintf("unknown(%d)", k)
