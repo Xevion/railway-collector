@@ -15,75 +15,8 @@ import (
 	"github.com/xevion/railway-collector/internal/sink"
 )
 
-// rawMetricsResult mirrors the JSON shape of a single metrics result
-// returned by the Railway API. Used for unmarshalling raw query responses.
-type rawMetricsResult struct {
-	Measurement string           `json:"measurement"`
-	Tags        rawMetricsTags   `json:"tags"`
-	Values      []rawMetricValue `json:"values"`
-}
-
-type rawMetricsTags struct {
-	ProjectID            *string `json:"projectId"`
-	ServiceID            *string `json:"serviceId"`
-	EnvironmentID        *string `json:"environmentId"`
-	DeploymentID         *string `json:"deploymentId"`
-	DeploymentInstanceID *string `json:"deploymentInstanceId"`
-	Region               *string `json:"region"`
-	VolumeID             *string `json:"volumeId"`
-	VolumeInstanceID     *string `json:"volumeInstanceId"`
-}
-
-// buildMetricLabels builds metric labels from raw JSON tags, enriching with
-// target names where possible.
-func buildMetricLabels(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	labels := make(map[string]string)
-
-	if tags.ProjectID != nil {
-		labels["project_id"] = *tags.ProjectID
-	}
-	if tags.ServiceID != nil {
-		labels["service_id"] = *tags.ServiceID
-	}
-	if tags.EnvironmentID != nil {
-		labels["environment_id"] = *tags.EnvironmentID
-	}
-	if tags.DeploymentID != nil {
-		labels["deployment_id"] = *tags.DeploymentID
-	}
-	if tags.DeploymentInstanceID != nil {
-		labels["deployment_instance_id"] = *tags.DeploymentInstanceID
-	}
-	if tags.Region != nil {
-		labels["region"] = *tags.Region
-	}
-	if tags.VolumeID != nil {
-		labels["volume_id"] = *tags.VolumeID
-	}
-	if tags.VolumeInstanceID != nil {
-		labels["volume_instance_id"] = *tags.VolumeInstanceID
-	}
-
-	for _, t := range targets {
-		if tags.ServiceID != nil && t.ServiceID == *tags.ServiceID &&
-			tags.EnvironmentID != nil && t.EnvironmentID == *tags.EnvironmentID {
-			labels["project_name"] = t.ProjectName
-			labels["service_name"] = t.ServiceName
-			labels["environment_name"] = t.EnvironmentName
-			break
-		}
-	}
-
-	return labels
-}
-
-type rawMetricValue struct {
-	Ts    int     `json:"ts"`
-	Value float64 `json:"value"`
-}
-
-// ProjectMetricsGeneratorConfig configures a ProjectMetricsGenerator.
-type ProjectMetricsGeneratorConfig struct {
+// ServiceMetricsGeneratorConfig configures a ServiceMetricsGenerator.
+type ServiceMetricsGeneratorConfig struct {
 	Discovery       TargetProvider
 	Store           StateStore
 	Sinks           []sink.Sink
@@ -98,10 +31,10 @@ type ProjectMetricsGeneratorConfig struct {
 	Logger          *slog.Logger
 }
 
-// ProjectMetricsGenerator implements TaskGenerator for metrics collection.
-// It scans coverage gaps each poll, prioritizes by recency (live edge first),
-// and emits chunked WorkItems for older gaps and open-ended items for the live edge.
-type ProjectMetricsGenerator struct {
+// ServiceMetricsGenerator implements TaskGenerator for per-service+environment
+// metrics collection. It scans coverage gaps for each unique (serviceID, environmentID)
+// pair, prioritizes by recency, and emits chunked WorkItems.
+type ServiceMetricsGenerator struct {
 	discovery       TargetProvider
 	store           StateStore
 	sinks           []sink.Sink
@@ -118,16 +51,20 @@ type ProjectMetricsGenerator struct {
 	nextPoll time.Time // earliest time to emit items again
 }
 
-// NewProjectMetricsGenerator creates a ProjectMetricsGenerator.
-func NewProjectMetricsGenerator(cfg ProjectMetricsGeneratorConfig) *ProjectMetricsGenerator {
+// NewServiceMetricsGenerator creates a ServiceMetricsGenerator.
+func NewServiceMetricsGenerator(cfg ServiceMetricsGeneratorConfig) *ServiceMetricsGenerator {
 	measurements := cfg.Measurements
 	if len(measurements) == 0 {
 		measurements = []railway.MetricMeasurement{
 			railway.MetricMeasurementCpuUsage,
+			railway.MetricMeasurementCpuLimit,
 			railway.MetricMeasurementMemoryUsageGb,
+			railway.MetricMeasurementMemoryLimitGb,
 			railway.MetricMeasurementNetworkRxGb,
 			railway.MetricMeasurementNetworkTxGb,
 			railway.MetricMeasurementDiskUsageGb,
+			railway.MetricMeasurementEphemeralDiskUsageGb,
+			railway.MetricMeasurementBackupUsageGb,
 		}
 	}
 	if cfg.MetricRetention == 0 {
@@ -140,7 +77,7 @@ func NewProjectMetricsGenerator(cfg ProjectMetricsGeneratorConfig) *ProjectMetri
 		cfg.MaxItemsPerPoll = 10
 	}
 
-	return &ProjectMetricsGenerator{
+	return &ServiceMetricsGenerator{
 		discovery:       cfg.Discovery,
 		store:           cfg.Store,
 		sinks:           cfg.Sinks,
@@ -157,16 +94,16 @@ func NewProjectMetricsGenerator(cfg ProjectMetricsGeneratorConfig) *ProjectMetri
 }
 
 // Type returns TaskTypeMetrics.
-func (g *ProjectMetricsGenerator) Type() TaskType {
+func (g *ServiceMetricsGenerator) Type() TaskType {
 	return TaskTypeMetrics
 }
 
 // NextPoll returns the earliest time this generator will produce work.
-func (g *ProjectMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
+func (g *ServiceMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
 
 // metricsBatchKey computes the batch key from shared query parameters.
 // Items with the same batch key can be merged into one aliased request.
-func (g *ProjectMetricsGenerator) metricsBatchKey() string {
+func (g *ServiceMetricsGenerator) metricsBatchKey() string {
 	var parts []string
 	for _, m := range g.measurements {
 		parts = append(parts, string(m))
@@ -176,7 +113,7 @@ func (g *ProjectMetricsGenerator) metricsBatchKey() string {
 
 // metricsBatchKeyChunk computes a batch key for a chunked (older gap) query.
 // Includes chunk boundaries so that items for the same time window can be merged.
-func (g *ProjectMetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time.Time) string {
+func (g *ServiceMetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time.Time) string {
 	var parts []string
 	for _, m := range g.measurements {
 		parts = append(parts, string(m))
@@ -186,34 +123,9 @@ func (g *ProjectMetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time
 		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
 }
 
-// alignToChunkBoundary truncates t down to the nearest chunk boundary.
-func alignToChunkBoundary(t time.Time, chunkSize time.Duration) time.Time {
-	unix := t.Unix()
-	chunkSec := int64(chunkSize.Seconds())
-	return time.Unix(unix-unix%chunkSec, 0).UTC()
-}
-
-// alignedChunks splits a gap into chunks aligned to fixed boundaries.
-func alignedChunks(gap TimeRange, chunkSize time.Duration) []TimeRange {
-	alignedStart := alignToChunkBoundary(gap.Start, chunkSize)
-
-	var chunks []TimeRange
-	cursor := alignedStart
-	for cursor.Before(gap.End) {
-		end := cursor.Add(chunkSize)
-		if end.After(gap.End) {
-			end = gap.End
-		}
-		chunks = append(chunks, TimeRange{Start: cursor, End: end})
-		cursor = cursor.Add(chunkSize)
-	}
-	return chunks
-}
-
-// Poll scans coverage gaps for all projects, prioritizes by recency (live edge
-// first), and returns WorkItems. The live edge gets an open-ended query (no
-// endDate); older gaps are chunked into fixed intervals for batching.
-func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
+// Poll scans coverage gaps for all unique service+environment pairs,
+// prioritizes by recency (live edge first), and returns WorkItems.
+func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 	if now.Before(g.nextPoll) {
 		return nil
 	}
@@ -223,28 +135,29 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 		return nil
 	}
 
-	projectIDs := uniqueProjectIDs(targets)
+	svcEnvs := uniqueServiceEnvironments(targets)
 	retentionStart := now.Add(-g.metricRetention)
 
 	groupBy := []railway.MetricTag{
-		railway.MetricTagServiceId,
-		railway.MetricTagEnvironmentId,
 		railway.MetricTagDeploymentId,
+		railway.MetricTagDeploymentInstanceId,
+		railway.MetricTagRegion,
 	}
 
 	var items []WorkItem
 	itemCount := 0
 
-	for _, pid := range projectIDs {
+	for _, target := range svcEnvs {
 		if itemCount >= g.maxItemsPerPoll {
 			break
 		}
 
-		coverageKey := CoverageKey(pid, "metric")
+		compositeKey := target.ServiceID + ":" + target.EnvironmentID
+		coverageKey := CoverageKey(compositeKey, "service-metric")
 		existing, err := LoadCoverage(g.store, coverageKey)
 		if err != nil {
-			g.logger.Warn("failed to load metric coverage",
-				"project_id", pid, "error", err)
+			g.logger.Warn("failed to load service metric coverage",
+				"service_id", target.ServiceID, "environment_id", target.EnvironmentID, "error", err)
 			continue
 		}
 
@@ -257,8 +170,9 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 		for _, gap := range gaps {
 			totalGapDuration += gap.End.Sub(gap.Start)
 		}
-		g.logger.Debug("metric coverage gaps found",
-			"project_id", pid,
+		g.logger.Debug("service metric coverage gaps found",
+			"service_id", target.ServiceID,
+			"environment_id", target.EnvironmentID,
 			"gaps", len(gaps),
 			"total_gap_duration", totalGapDuration,
 			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
@@ -287,12 +201,14 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 							break
 						}
 						items = append(items, WorkItem{
-							ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
-							Kind:     QueryMetrics,
+							ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
+							Kind:     QueryServiceMetrics,
 							TaskType: TaskTypeMetrics,
-							AliasKey: pid,
+							AliasKey: compositeKey,
 							BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
 							Params: map[string]any{
+								"serviceId":              target.ServiceID,
+								"environmentId":          target.EnvironmentID,
 								"startDate":              chunk.Start.Format(time.RFC3339),
 								"endDate":                chunk.End.Format(time.RFC3339),
 								"measurements":           g.measurements,
@@ -303,7 +219,6 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 						})
 						itemCount++
 					}
-					// Adjust the live-edge start to the tail
 					gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
 				}
 
@@ -313,12 +228,14 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 
 				// Open-ended query: no endDate, captures data up to "now"
 				items = append(items, WorkItem{
-					ID:       fmt.Sprintf("metrics:%s:%s", pid, gap.Start.Format(time.RFC3339)),
-					Kind:     QueryMetrics,
+					ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, gap.Start.Format(time.RFC3339)),
+					Kind:     QueryServiceMetrics,
 					TaskType: TaskTypeMetrics,
-					AliasKey: pid,
+					AliasKey: compositeKey,
 					BatchKey: g.metricsBatchKey(),
 					Params: map[string]any{
+						"serviceId":              target.ServiceID,
+						"environmentId":          target.EnvironmentID,
 						"startDate":              gap.Start.Format(time.RFC3339),
 						"measurements":           g.measurements,
 						"groupBy":                groupBy,
@@ -336,12 +253,14 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 					}
 
 					items = append(items, WorkItem{
-						ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
-						Kind:     QueryMetrics,
+						ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", target.ServiceID, target.EnvironmentID, chunk.Start.Format(time.RFC3339)),
+						Kind:     QueryServiceMetrics,
 						TaskType: TaskTypeMetrics,
-						AliasKey: pid,
+						AliasKey: compositeKey,
 						BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
 						Params: map[string]any{
+							"serviceId":              target.ServiceID,
+							"environmentId":          target.EnvironmentID,
 							"startDate":              chunk.Start.Format(time.RFC3339),
 							"endDate":                chunk.End.Format(time.RFC3339),
 							"measurements":           g.measurements,
@@ -363,32 +282,48 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 	return items
 }
 
-// Deliver processes the raw metrics JSON response for a single project.
-// It transforms the data into MetricPoints, writes to sinks, and updates
-// coverage. Coverage is the single source of truth (no cursors).
-func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
-	projectID := item.AliasKey
+// Deliver processes the raw metrics JSON response for a single service+environment.
+// It transforms the data into MetricPoints, writes to sinks, and updates coverage.
+func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
+	compositeKey := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
 
+	// Split composite key to get individual IDs
+	parts := strings.SplitN(compositeKey, ":", 2)
+	serviceID := parts[0]
+	environmentID := ""
+	if len(parts) > 1 {
+		environmentID = parts[1]
+	}
+
+	// Look up names from targets
+	serviceName := ""
+	environmentName := ""
 	projectName := ""
 	for _, t := range targets {
-		if t.ProjectID == projectID {
+		if t.ServiceID == serviceID && t.EnvironmentID == environmentID {
+			serviceName = t.ServiceName
+			environmentName = t.EnvironmentName
 			projectName = t.ProjectName
 			break
 		}
 	}
 
 	if err != nil {
-		g.logger.Error("metrics delivery failed",
-			"project", projectName, "project_id", projectID, "error", err)
+		g.logger.Error("service metrics delivery failed",
+			"service", serviceName, "service_id", serviceID,
+			"environment", environmentName, "environment_id", environmentID,
+			"error", err)
 		return
 	}
 
 	var results []rawMetricsResult
 	if unmarshalErr := json.Unmarshal(data, &results); unmarshalErr != nil {
-		g.logger.Error("failed to parse metrics response",
-			"project", projectName, "project_id", projectID, "error", unmarshalErr)
+		g.logger.Error("failed to parse service metrics response",
+			"service", serviceName, "service_id", serviceID,
+			"environment", environmentName, "environment_id", environmentID,
+			"error", unmarshalErr)
 		return
 	}
 
@@ -406,11 +341,13 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(projectID, "metric")
+		coverageKey := CoverageKey(compositeKey, "service-metric")
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr != nil {
-			g.logger.Warn("failed to load metric coverage",
-				"project", projectName, "project_id", projectID, "error", covErr)
+			g.logger.Warn("failed to load service metric coverage",
+				"service", serviceName, "service_id", serviceID,
+				"environment", environmentName, "environment_id", environmentID,
+				"error", covErr)
 		} else {
 			kind := CoverageCollected
 			if len(results) == 0 {
@@ -423,8 +360,10 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 				Resolution: g.sampleRate,
 			})
 			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save metric coverage",
-					"project", projectName, "project_id", projectID, "error", saveErr)
+				g.logger.Warn("failed to save service metric coverage",
+					"service", serviceName, "service_id", serviceID,
+					"environment", environmentName, "environment_id", environmentID,
+					"error", saveErr)
 			}
 		}
 	}
@@ -433,7 +372,16 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	var points []sink.MetricPoint
 	for _, result := range results {
 		metricName := measurementToMetricName(result.Measurement)
-		baseLabels := g.buildLabelsFromRaw(result.Tags, targets)
+		baseLabels := buildMetricLabels(result.Tags, targets)
+		// Ensure project_id is always set, even if API tags omit it for service-scoped queries
+		if _, ok := baseLabels["project_id"]; !ok {
+			for _, t := range targets {
+				if t.ServiceID == serviceID && t.EnvironmentID == environmentID {
+					baseLabels["project_id"] = t.ProjectID
+					break
+				}
+			}
+		}
 
 		for _, v := range result.Values {
 			points = append(points, sink.MetricPoint{
@@ -444,10 +392,11 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 			})
 		}
 
-		g.logger.Log(ctx, logging.LevelTrace, "metric series",
+		g.logger.Log(ctx, logging.LevelTrace, "service metric series",
 			"measurement", result.Measurement,
 			"points", len(result.Values),
-			"project_id", projectID,
+			"service_id", serviceID,
+			"environment_id", environmentID,
 		)
 	}
 
@@ -455,8 +404,10 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	if len(points) == 0 {
 		level = logging.LevelTrace
 	}
-	g.logger.Log(ctx, level, "metrics delivered",
-		"project", projectName, "project_id", projectID,
+	g.logger.Log(ctx, level, "service metrics delivered",
+		"project", projectName,
+		"service", serviceName, "service_id", serviceID,
+		"environment", environmentName, "environment_id", environmentID,
 		"series", len(results), "points", len(points),
 		"start", startDateStr, "end", endTime.Format(time.RFC3339),
 	)
@@ -465,25 +416,12 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	if len(points) > 0 {
 		for _, s := range g.sinks {
 			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write metrics to sink",
-					"sink", s.Name(), "project", projectName, "project_id", projectID, "error", sinkErr)
+				g.logger.Error("failed to write service metrics to sink",
+					"sink", s.Name(),
+					"service", serviceName, "service_id", serviceID,
+					"environment", environmentName, "environment_id", environmentID,
+					"error", sinkErr)
 			}
 		}
 	}
-}
-
-// buildLabelsFromRaw builds metric labels from raw JSON tags,
-// enriching with target names where possible.
-func (g *ProjectMetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []ServiceTarget) map[string]string {
-	return buildMetricLabels(tags, targets)
-}
-
-// measurementToMetricName converts a raw measurement string
-// (e.g. "CPU_USAGE") to the canonical metric name.
-func measurementToMetricName(measurement string) string {
-	m := railway.MetricMeasurement(measurement)
-	if name, ok := metricNameMap[m]; ok {
-		return name
-	}
-	return fmt.Sprintf("railway_%s", strings.ToLower(measurement))
 }

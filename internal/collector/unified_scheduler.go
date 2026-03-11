@@ -2,7 +2,9 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +118,12 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 
 	for _, gen := range s.cfg.Generators {
 		items := gen.Poll(now)
+		if len(items) > 0 {
+			s.cfg.Logger.Debug("generator polled",
+				"type", gen.Type().String(),
+				"items", len(items),
+			)
+		}
 		for _, item := range items {
 			allItems = append(allItems, item)
 			generatorMap[item.ID] = gen
@@ -158,7 +166,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	// 3. Convert work items to self-contained alias fragments.
 	var fragments []AliasFragment
 	for _, item := range queryItems {
-		fragments = append(fragments, FragmentFromWorkItem(item))
+		fragments = append(fragments, FragmentFromWorkItem(item, now))
 	}
 	SortByPriority(fragments)
 
@@ -196,6 +204,14 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 	// 5. Pack credited fragments into requests (breadth budget).
 	requests := Pack(credited)
 
+	if len(requests) > 0 {
+		s.cfg.Logger.Debug("packed fragments into requests",
+			"fragments", len(credited),
+			"requests", len(requests),
+			"kind_breakdown", kindBreakdown(credited),
+		)
+	}
+
 	if len(requests) == 0 && !deducted[TaskTypeDiscovery] {
 		s.logIdleStatus(now)
 		return
@@ -216,17 +232,33 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 			"total_requests", len(requests),
 			"aliases", len(req.Fragments),
 			"breadth", req.Breadth,
+			"estimated_points", req.EstimatedPoints,
+			"kind_breakdown", kindBreakdown(req.Fragments),
 		)
 
 		query, vars := req.AssembleQuery()
 		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
 		s.updateRateState()
 
-		// On computation limit errors with multi-alias requests, retry individually
-		if queryErr != nil && len(req.Fragments) > 1 && strings.Contains(queryErr.Error(), "Problem processing request") {
+		// On computation limit errors with multi-alias requests, retry individually.
+		// The error may come as a transport error (queryErr) or as a GraphQL-level
+		// error in a 200 response with empty data.
+		computationErr := queryErr
+		if computationErr == nil && resp != nil && len(resp.Data) == 0 && len(resp.Errors) > 0 {
+			for _, gqlErr := range resp.Errors {
+				if strings.Contains(gqlErr.Message, "Problem processing request") {
+					computationErr = fmt.Errorf("GraphQL request failed: %s", gqlErr.Message)
+					break
+				}
+			}
+		}
+		if computationErr != nil && len(req.Fragments) > 1 && strings.Contains(computationErr.Error(), "Problem processing request") {
 			s.cfg.Logger.Warn("batch request hit computation limit, retrying aliases individually",
 				"aliases", len(req.Fragments),
-				"error", queryErr,
+				"breadth", req.Breadth,
+				"estimated_points", req.EstimatedPoints,
+				"kind_breakdown", kindBreakdown(req.Fragments),
+				"error", computationErr,
 			)
 			s.retryFragmentsIndividually(ctx, req.Fragments, generatorMap)
 			continue
@@ -281,6 +313,15 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 			Fragments: []AliasFragment{frag},
 			Breadth:   frag.Breadth,
 		}
+
+		s.cfg.Logger.Debug("retrying alias individually",
+			"alias", frag.Alias,
+			"kind", frag.Item.Kind,
+			"breadth", frag.Breadth,
+			"estimated_points", frag.EstimatedPoints,
+			"alias_key", frag.Item.AliasKey,
+		)
+
 		query, vars := soloReq.AssembleQuery()
 		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
 		s.updateRateState()
@@ -289,12 +330,28 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 			s.cfg.Logger.Warn("individual alias retry failed",
 				"alias", frag.Alias,
 				"kind", frag.Item.Kind,
+				"breadth", frag.Breadth,
 				"error", queryErr,
 			)
 		}
 
 		DispatchRequestResults(ctx, soloReq, resp, queryErr, generatorMap)
 	}
+}
+
+// kindBreakdown returns a summary string of fragment counts by QueryKind,
+// e.g. "metrics:10 replicaMetrics:5 httpDurationMetrics:5".
+func kindBreakdown(fragments []AliasFragment) string {
+	counts := make(map[QueryKind]int)
+	for _, f := range fragments {
+		counts[f.Item.Kind]++
+	}
+	var parts []string
+	for kind, count := range counts {
+		parts = append(parts, fmt.Sprintf("%s:%d", kind, count))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, " ")
 }
 
 const idleLogInterval = 30 * time.Second

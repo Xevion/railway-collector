@@ -91,6 +91,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
+					"endDate":           "2025-01-01T01:00:00Z",
 					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 					"groupBy":           []railway.MetricTag{railway.MetricTagServiceId},
 					"sampleRateSeconds": 30,
@@ -102,6 +103,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-02T00:00:00Z",
+					"endDate":           "2025-01-02T01:00:00Z",
 					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 					"groupBy":           []railway.MetricTag{railway.MetricTagServiceId},
 					"sampleRateSeconds": 30,
@@ -169,6 +171,7 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
+					"endDate":           "2025-01-01T01:00:00Z",
 					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 					"groupBy":           []railway.MetricTag{},
 					"sampleRateSeconds": 30,
@@ -267,6 +270,7 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
+					"endDate":           "2025-01-01T01:00:00Z",
 					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 					"groupBy":           []railway.MetricTag{},
 					"sampleRateSeconds": 30,
@@ -421,6 +425,7 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 				BatchKey: "sr=30",
 				Params: map[string]any{
 					"startDate":         "2025-01-01T00:00:00Z",
+					"endDate":           "2025-01-01T01:00:00Z",
 					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 					"groupBy":           []railway.MetricTag{},
 					"sampleRateSeconds": 30,

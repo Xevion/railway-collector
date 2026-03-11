@@ -164,6 +164,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		MetricsRate:   cfg.Collect.Credits.MetricsRate,
 		LogsRate:      cfg.Collect.Credits.LogsRate,
 		DiscoveryRate: cfg.Collect.Credits.DiscoveryRate,
+		UsageRate:     cfg.Collect.Credits.UsageRate,
 		MaxCredits:    cfg.Collect.Credits.MaxCredits,
 	}
 	credits := collector.NewCreditAllocator(creditCfg, now, logger)
@@ -172,7 +173,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	var generators []collector.TaskGenerator
 
 	if cfg.Collect.Metrics.Enabled {
-		generators = append(generators, collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+		generators = append(generators, collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 			Discovery:       discovery,
 			Store:           store,
 			Sinks:           sinks,
@@ -186,6 +187,60 @@ func (cmd *RunCmd) Run(c *CLI) error {
 			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
 			Logger:          logger,
 		}))
+
+		// Service-level metrics
+		if cfg.Collect.Metrics.Service.Enabled {
+			svcMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Service.Measurements)
+			generators = append(generators, collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
+				Discovery:       discovery,
+				Store:           store,
+				Sinks:           sinks,
+				Clock:           realClock,
+				Measurements:    svcMeasurements,
+				SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+				AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+				Interval:        cfg.Collect.Metrics.Interval,
+				MetricRetention: cfg.Collect.GapFill.MetricRetention,
+				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+				Logger:          logger,
+			}))
+		}
+
+		// Replica metrics
+		if cfg.Collect.Metrics.Replica.Enabled {
+			replicaMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Replica.Measurements)
+			generators = append(generators, collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+				Discovery:       discovery,
+				Store:           store,
+				Sinks:           sinks,
+				Clock:           realClock,
+				Measurements:    replicaMeasurements,
+				SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+				AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+				Interval:        cfg.Collect.Metrics.Interval,
+				MetricRetention: cfg.Collect.GapFill.MetricRetention,
+				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+				Logger:          logger,
+			}))
+		}
+
+		// HTTP metrics
+		if cfg.Collect.Metrics.HTTP.Enabled {
+			generators = append(generators, collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery:       discovery,
+				Store:           store,
+				Sinks:           sinks,
+				Clock:           realClock,
+				StepSeconds:     cfg.Collect.Metrics.HTTP.StepSeconds,
+				Interval:        cfg.Collect.Metrics.Interval,
+				MetricRetention: cfg.Collect.GapFill.MetricRetention,
+				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+				Logger:          logger,
+			}))
+		}
 	}
 
 	if cfg.Collect.Logs.Enabled {
@@ -212,13 +267,30 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		}))
 	}
 
+	// Usage collection
+	if cfg.Collect.Usage.Enabled {
+		usageMeasurements := collector.ResolveMeasurements(cfg.Collect.Usage.Measurements)
+		generators = append(generators, collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+			Discovery:    discovery,
+			Sinks:        sinks,
+			Clock:        realClock,
+			Measurements: usageMeasurements,
+			Interval:     cfg.Collect.Usage.Interval,
+			Logger:       logger,
+		}))
+	}
+
 	sinkNames := make([]string, len(sinks))
 	for i, s := range sinks {
 		sinkNames[i] = s.Name()
 	}
 	logger.Info("railway collector started",
 		"metrics_enabled", cfg.Collect.Metrics.Enabled,
+		"service_metrics_enabled", cfg.Collect.Metrics.Service.Enabled,
+		"replica_metrics_enabled", cfg.Collect.Metrics.Replica.Enabled,
+		"http_metrics_enabled", cfg.Collect.Metrics.HTTP.Enabled,
 		"logs_enabled", cfg.Collect.Logs.Enabled,
+		"usage_enabled", cfg.Collect.Usage.Enabled,
 		"targets", len(discovery.Targets()),
 		"generators", len(generators),
 		"sinks", strings.Join(sinkNames, ","),

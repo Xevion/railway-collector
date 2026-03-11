@@ -30,6 +30,47 @@ collect:
     # Smoothing window for CPU metrics (seconds).
     averaging_window_seconds: 60
 
+    # Service-level metrics (per service+environment, more granular than project).
+    service:
+      enabled: true
+      # All available measurements for service-level collection.
+      measurements:
+        - cpu
+        - cpu_limit
+        - memory
+        - memory_limit
+        - network_rx
+        - network_tx
+        - disk
+        - ephemeral_disk
+        - backup
+
+    # Replica-level metrics (per-replica CPU/memory via undocumented API).
+    replica:
+      enabled: true
+      measurements:
+        - cpu
+        - memory
+
+    # HTTP request metrics (duration percentiles + request counts by status code).
+    # Uses undocumented Railway API endpoints.
+    http:
+      enabled: true
+      # Resolution of HTTP metric samples (seconds).
+      step_seconds: 60
+
+  usage:
+    enabled: true
+    # How often to poll for billing/cost data.
+    interval: 1h
+    # Which measurements to collect usage for.
+    measurements:
+      - cpu
+      - memory
+      - network_tx
+      - disk
+      - backup
+
   logs:
     enabled: true
     # How often to poll for new logs. Runtime logs are batched per environment;
@@ -75,6 +116,7 @@ collect:
   #   metrics_rate: 8.0      # credits/min for metrics
   #   logs_rate: 6.0         # credits/min for logs
   #   discovery_rate: 1.0    # credits/min for discovery
+  #   usage_rate: 1.0        # credits/min for usage/billing
   #   max_credits: 4.0       # burst cap per type
 
   # Scheduler tuning (defaults are usually fine).

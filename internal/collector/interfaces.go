@@ -15,6 +15,7 @@ const (
 	TaskTypeMetrics TaskType = iota
 	TaskTypeLogs
 	TaskTypeDiscovery
+	TaskTypeUsage
 )
 
 // String returns a human-readable name for the task type.
@@ -26,6 +27,8 @@ func (t TaskType) String() string {
 		return "logs"
 	case TaskTypeDiscovery:
 		return "discovery"
+	case TaskTypeUsage:
+		return "usage"
 	default:
 		return "unknown"
 	}
@@ -36,11 +39,17 @@ func (t TaskType) String() string {
 type QueryKind string
 
 const (
-	QueryMetrics         QueryKind = "metrics"
-	QueryEnvironmentLogs QueryKind = "environmentLogs"
-	QueryBuildLogs       QueryKind = "buildLogs"
-	QueryHttpLogs        QueryKind = "httpLogs"
-	QueryDiscovery       QueryKind = "discovery"
+	QueryMetrics                    QueryKind = "metrics"
+	QueryServiceMetrics             QueryKind = "serviceMetrics"
+	QueryReplicaMetrics             QueryKind = "replicaMetrics"
+	QueryHttpDurationMetrics        QueryKind = "httpDurationMetrics"
+	QueryHttpMetricsGroupedByStatus QueryKind = "httpMetricsGroupedByStatus"
+	QueryEnvironmentLogs            QueryKind = "environmentLogs"
+	QueryBuildLogs                  QueryKind = "buildLogs"
+	QueryHttpLogs                   QueryKind = "httpLogs"
+	QueryDiscovery                  QueryKind = "discovery"
+	QueryUsage                      QueryKind = "usage"
+	QueryEstimatedUsage             QueryKind = "estimatedUsage"
 )
 
 // WorkItem describes a unit of work that a TaskGenerator needs executed.

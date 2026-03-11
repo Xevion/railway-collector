@@ -40,6 +40,21 @@ func uniqueProjectIDs(targets []ServiceTarget) []string {
 	return ids
 }
 
+// uniqueServiceEnvironments returns deduplicated ServiceTargets by (serviceID, environmentID) pair.
+func uniqueServiceEnvironments(targets []ServiceTarget) []ServiceTarget {
+	type key struct{ svc, env string }
+	seen := map[key]bool{}
+	var result []ServiceTarget
+	for _, t := range targets {
+		k := key{t.ServiceID, t.EnvironmentID}
+		if !seen[k] {
+			seen[k] = true
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
 func copyLabels(src map[string]string) map[string]string {
 	dst := make(map[string]string, len(src))
 	for k, v := range src {

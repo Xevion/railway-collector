@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	Endpoint = "https://backboard.railway.com/graphql/v2"
+	Endpoint = "https://backboard.railway.com/graphql/internal"
 )
 
 // Client wraps the genqlient GraphQL client with rate limiting and auth.

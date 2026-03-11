@@ -41,6 +41,13 @@ type CollectConfig struct {
 	GapFill   GapFillConfig          `koanf:"gap_fill"`
 	Scheduler SchedulerConfig        `koanf:"scheduler"`
 	Credits   CreditsConfig          `koanf:"credits"`
+	Usage     UsageCollectConfig     `koanf:"usage"`
+}
+
+type UsageCollectConfig struct {
+	Enabled      bool          `koanf:"enabled"`
+	Interval     time.Duration `koanf:"interval"`
+	Measurements []string      `koanf:"measurements"`
 }
 
 type SchedulerConfig struct {
@@ -57,6 +64,7 @@ type CreditsConfig struct {
 	MetricsRate   float64 `koanf:"metrics_rate"`
 	LogsRate      float64 `koanf:"logs_rate"`
 	DiscoveryRate float64 `koanf:"discovery_rate"`
+	UsageRate     float64 `koanf:"usage_rate"`
 	// Maximum accumulated credits per type (prevents burst after idle)
 	MaxCredits float64 `koanf:"max_credits"`
 }
@@ -91,6 +99,25 @@ type MetricsCollectConfig struct {
 	Measurements           []string      `koanf:"measurements"`
 	SampleRateSeconds      int           `koanf:"sample_rate_seconds"`
 	AveragingWindowSeconds int           `koanf:"averaging_window_seconds"`
+	// Sub-configs for service-level, replica-level, and HTTP metrics collection
+	Service ServiceMetricsConfig `koanf:"service"`
+	Replica ReplicaMetricsConfig `koanf:"replica"`
+	HTTP    HTTPMetricsConfig    `koanf:"http"`
+}
+
+type ServiceMetricsConfig struct {
+	Enabled      bool     `koanf:"enabled"`
+	Measurements []string `koanf:"measurements"`
+}
+
+type ReplicaMetricsConfig struct {
+	Enabled      bool     `koanf:"enabled"`
+	Measurements []string `koanf:"measurements"`
+}
+
+type HTTPMetricsConfig struct {
+	Enabled     bool `koanf:"enabled"`
+	StepSeconds int  `koanf:"step_seconds"`
 }
 
 type LogsCollectConfig struct {
@@ -140,6 +167,18 @@ func DefaultConfig() *Config {
 				Measurements:           []string{"cpu", "memory", "network_rx", "network_tx", "disk"},
 				SampleRateSeconds:      60,
 				AveragingWindowSeconds: 60,
+				Service: ServiceMetricsConfig{
+					Enabled:      true,
+					Measurements: []string{"cpu", "cpu_limit", "memory", "memory_limit", "network_rx", "network_tx", "disk", "ephemeral_disk", "backup"},
+				},
+				Replica: ReplicaMetricsConfig{
+					Enabled:      true,
+					Measurements: []string{"cpu", "memory"},
+				},
+				HTTP: HTTPMetricsConfig{
+					Enabled:     true,
+					StepSeconds: 60,
+				},
 			},
 			Logs: LogsCollectConfig{
 				Enabled:  true,
@@ -168,7 +207,13 @@ func DefaultConfig() *Config {
 				MetricsRate:   8.0,
 				LogsRate:      6.0,
 				DiscoveryRate: 1.0,
+				UsageRate:     1.0,
 				MaxCredits:    4.0,
+			},
+			Usage: UsageCollectConfig{
+				Enabled:      true,
+				Interval:     time.Hour,
+				Measurements: []string{"cpu", "memory", "network_tx", "disk", "backup"},
 			},
 		},
 		Sinks: SinksConfig{

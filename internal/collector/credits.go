@@ -43,6 +43,7 @@ type CreditConfig struct {
 	MetricsRate   float64
 	LogsRate      float64
 	DiscoveryRate float64
+	UsageRate     float64
 	// Maximum accumulated credits per type (prevents burst after idle)
 	MaxCredits float64
 }
@@ -53,6 +54,7 @@ func DefaultCreditConfig() CreditConfig {
 		MetricsRate:   8.0, // absorbs most budget (metrics + gap filling)
 		LogsRate:      6.0, // env log gap filling + build/http logs
 		DiscoveryRate: 1.0, // 1/min, mostly unused (TTL cached)
+		UsageRate:     1.0, // low cadence billing snapshots
 		MaxCredits:    4.0,
 	}
 }
@@ -119,6 +121,7 @@ func NewCreditAllocator(cfg CreditConfig, now time.Time, logger *slog.Logger) *C
 			TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),
 			TaskTypeLogs:      newCreditPool(cfg.LogsRate, cfg.MaxCredits, now),
 			TaskTypeDiscovery: newCreditPool(cfg.DiscoveryRate, cfg.MaxCredits, now),
+			TaskTypeUsage:     newCreditPool(cfg.UsageRate, cfg.MaxCredits, now),
 		},
 		config: cfg,
 		regime: RegimeAbundant,
@@ -207,15 +210,18 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate * 0.5)
 		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate * 0.5)
 		ca.pools[TaskTypeDiscovery].setRate(0)
+		ca.pools[TaskTypeUsage].setRate(0) // usage can wait
 	case RegimeNormal:
 		// Full rate, discovery scaled
 		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
 		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
 		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
+		ca.pools[TaskTypeUsage].setRate(ca.config.UsageRate)
 	case RegimeAbundant:
 		// Full rate for everything
 		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
 		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
 		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
+		ca.pools[TaskTypeUsage].setRate(ca.config.UsageRate)
 	}
 }

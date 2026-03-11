@@ -184,6 +184,38 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				isLiveEdge := now.Sub(gap.End) < time.Minute
 
 				if isLiveEdge {
+					// If the gap is larger than one chunk, split the older
+					// portion into fixed chunks and only keep the tail as live edge.
+					gapDuration := gap.End.Sub(gap.Start)
+					if gapDuration > g.chunkSize {
+						olderGap := TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
+						chunks := alignedChunks(olderGap, g.chunkSize)
+						for _, chunk := range chunks {
+							if itemCount >= g.maxItemsPerPoll {
+								break
+							}
+							items = append(items, WorkItem{
+								ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
+								Kind:     QueryEnvironmentLogs,
+								TaskType: TaskTypeLogs,
+								AliasKey: t.EnvironmentID,
+								BatchKey: fmt.Sprintf("limit=%d,s=%s,e=%s",
+									g.limit, chunk.Start.Format(time.RFC3339), chunk.End.Format(time.RFC3339)),
+								Params: map[string]any{
+									"afterDate":  chunk.Start.Format(time.RFC3339Nano),
+									"beforeDate": chunk.End.Format(time.RFC3339Nano),
+									"afterLimit": g.limit,
+								},
+							})
+							itemCount++
+						}
+						gap = TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
+					}
+
+					if itemCount >= g.maxItemsPerPoll {
+						break
+					}
+
 					// Open-ended query for live edge
 					params := map[string]any{
 						"afterLimit": g.limit,

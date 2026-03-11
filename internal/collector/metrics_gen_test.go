@@ -17,14 +17,14 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestMetricsGenerator_Type(t *testing.T) {
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+func TestProjectMetricsGenerator_Type(t *testing.T) {
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Logger: slog.Default(),
 	})
 	assert.Equal(t, collector.TaskTypeMetrics, gen.Type())
 }
 
-func TestMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
+func TestProjectMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -40,7 +40,7 @@ func TestMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 	// No coverage -- gaps exist for both projects
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery:       targets,
 		Store:           store,
 		Clock:           fakeClock,
@@ -68,7 +68,7 @@ func TestMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 	assert.True(t, projectIDs["proj-2"], "should have items for proj-2")
 }
 
-func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
+func TestProjectMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -81,7 +81,7 @@ func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 	}).AnyTimes()
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery:       targets,
 		Store:           store,
 		Clock:           fakeClock,
@@ -107,7 +107,7 @@ func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 	require.NotEmpty(t, items)
 }
 
-func TestMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T) {
+func TestProjectMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -123,7 +123,7 @@ func TestMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T) {
 	// No coverage at all
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery:       targets,
 		Store:           store,
 		Clock:           fakeClock,
@@ -146,14 +146,14 @@ func TestMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T) {
 	}
 }
 
-func TestMetricsGenerator_Poll_NoTargets_ReturnsNil(t *testing.T) {
+func TestProjectMetricsGenerator_Poll_NoTargets_ReturnsNil(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
 	targets.EXPECT().Targets().Return([]collector.ServiceTarget{})
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery: targets,
 		Clock:     fakeClock,
 		Interval:  30 * time.Second,
@@ -164,7 +164,7 @@ func TestMetricsGenerator_Poll_NoTargets_ReturnsNil(t *testing.T) {
 	assert.Nil(t, items)
 }
 
-func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
+func TestProjectMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -194,7 +194,7 @@ func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 		},
 	}
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery:       targets,
 		Store:           store,
 		Sinks:           []sink.Sink{fakeSink},
@@ -250,7 +250,7 @@ func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	assert.NotContains(t, collected[0].Labels, "backfill")
 }
 
-func TestMetricsGenerator_Deliver_HandlesError(t *testing.T) {
+func TestProjectMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
@@ -261,7 +261,7 @@ func TestMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 
 	fakeSink := &recordingSink{}
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery: targets,
 		Sinks:     []sink.Sink{fakeSink},
 		Clock:     fakeClock,
@@ -278,7 +278,7 @@ func TestMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	gen.Deliver(context.Background(), item, nil, assert.AnError)
 }
 
-func TestMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
+func TestProjectMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
@@ -295,7 +295,7 @@ func TestMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
 	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
-	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 		Discovery: targets,
 		Store:     store,
 		Clock:     fakeClock,
@@ -314,4 +314,72 @@ func TestMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 
 	gen.Deliver(context.Background(), item, data, nil)
 	// No panic, coverage updated (gomock verifies SetCoverage was called)
+}
+
+func TestProjectMetricsGenerator_Poll_LargeLiveEdgeGap_ChunksOlderPortion(t *testing.T) {
+	// BUG: When a coverage gap extends from far in the past to "now", the
+	// isLiveEdge check (now.Sub(gap.End) < time.Minute) is true because
+	// gap.End IS near now. This causes the entire gap to be emitted as a
+	// single open-ended work item, bypassing chunking. A 90-day gap at 30s
+	// granularity would request ~260k points — well beyond the API limit.
+	//
+	// Expected: the older portion of the gap should be chunked, with only
+	// the most recent portion using an open-ended live-edge query.
+
+	ctrl := gomock.NewController(t)
+	store := mocks.NewMockStateStore(ctrl)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	now := fakeClock.Now()
+	chunkSize := 6 * time.Hour
+	// Retention of 7 days means the gap spans 7 days — far larger than one chunk.
+	retention := 7 * 24 * time.Hour
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
+	})
+
+	// No coverage at all — produces one gap from (now - retention) to now
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
+		Discovery:       targets,
+		Store:           store,
+		Clock:           fakeClock,
+		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		SampleRate:      30,
+		AvgWindow:       30,
+		Interval:        30 * time.Second,
+		MetricRetention: retention,
+		ChunkSize:       chunkSize,
+		MaxItemsPerPoll: 50, // high limit so we can see all items
+		Logger:          slog.Default(),
+	})
+
+	items := gen.Poll(now)
+	require.NotEmpty(t, items)
+
+	// The gap spans 7 days. With 6h chunks that's 28 chunks. Regardless of
+	// exact count, emitting a SINGLE item for the whole gap is the bug.
+	assert.Greater(t, len(items), 1,
+		"a 7-day live-edge gap must be split into multiple work items, not emitted as one")
+
+	// Count how many items have an endDate (chunked) vs open-ended (live edge).
+	var chunked, openEnded int
+	for _, item := range items {
+		if _, hasEnd := item.Params["endDate"]; hasEnd {
+			chunked++
+		} else {
+			openEnded++
+		}
+	}
+
+	// At most one item should be open-ended (the live-edge tail).
+	assert.LessOrEqual(t, openEnded, 1,
+		"at most one work item should be open-ended (live edge)")
+
+	// The majority should be chunked with explicit endDate.
+	assert.Greater(t, chunked, 0,
+		"older portions of the gap must be chunked with explicit endDate")
 }

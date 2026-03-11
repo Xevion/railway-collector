@@ -1382,6 +1382,60 @@ type MetricTags {
   volumeInstanceId: String
 }
 
+"""The result of a replica metrics query."""
+type ReplicaMetricsResult {
+  """The measurement of the metric."""
+  measurement: MetricMeasurement!
+
+  """The name of the replica."""
+  replicaName: String!
+
+  """The samples of the metric."""
+  values: [Metric!]!
+}
+
+"""Response wrapper for HTTP duration metrics."""
+type HttpDurationMetricsResponse {
+  """The duration metric samples."""
+  samples: [HttpDurationMetricsSample!]!
+}
+
+"""A single HTTP duration metrics sample with percentile values."""
+type HttpDurationMetricsSample {
+  """Unix timestamp."""
+  ts: Int!
+
+  """50th percentile duration."""
+  p50: Float!
+
+  """90th percentile duration."""
+  p90: Float!
+
+  """95th percentile duration."""
+  p95: Float!
+
+  """99th percentile duration."""
+  p99: Float!
+}
+
+"""HTTP metrics grouped by status code."""
+type HttpMetricsGroupedByStatusResult {
+  """The HTTP status code."""
+  statusCode: Int!
+
+  """The metric samples for this status code."""
+  samples: [HttpMetricsSample!]!
+}
+
+"""A single HTTP metrics sample."""
+type HttpMetricsSample {
+  """Unix timestamp."""
+  ts: Int!
+
+  """The metric value (request count)."""
+  value: Float!
+}
+
 enum MonitorAlertResourceType {
   SERVICE
   VOLUME
@@ -2997,6 +3051,29 @@ type Query {
     startDate: String
   ): [HttpLog!]!
 
+  """Get HTTP request duration percentile metrics for a service. Undocumented Railway API endpoint."""
+  httpDurationMetrics(
+    serviceId: String!
+    environmentId: String!
+    startDate: DateTime!
+    endDate: DateTime!
+    stepSeconds: Int
+    statusCode: Int
+    method: String
+    path: String
+  ): HttpDurationMetricsResponse!
+
+  """Get HTTP request metrics grouped by status code. Undocumented Railway API endpoint."""
+  httpMetricsGroupedByStatus(
+    serviceId: String!
+    environmentId: String!
+    startDate: DateTime!
+    endDate: DateTime!
+    stepSeconds: Int
+    method: String
+    path: String
+  ): [HttpMetricsGroupedByStatusResult!]!
+
   """Get an integration auth by provider providerId"""
   integrationAuth(provider: String!, providerId: String!): IntegrationAuth!
 
@@ -3138,6 +3215,17 @@ type Query {
 
   """List available regions"""
   regions(projectId: String): [Region!]!
+
+  """Get replica-level metrics for a service. Undocumented Railway API endpoint."""
+  replicaMetrics(
+    environmentId: String!
+    serviceId: String!
+    startDate: DateTime!
+    endDate: DateTime
+    sampleRateSeconds: Int
+    averagingWindowSeconds: Int
+    measurements: [MetricMeasurement!]!
+  ): [ReplicaMetricsResult!]!
 
   """Get resource access for the current user or workspace"""
   resourceAccess(explicitResourceOwner: ExplicitOwnerInput!): ResourceAccess!

@@ -14,6 +14,8 @@ const MetricsFieldBody = `{
         deploymentId
         deploymentInstanceId
         region
+        volumeId
+        volumeInstanceId
       }
       values {
         ts
@@ -65,6 +67,54 @@ const HttpLogsFieldBody = `{
 
 // EnvironmentLogsFieldBody is the selection set for environment logs.
 const EnvironmentLogsFieldBody = DeploymentLogsFieldBody
+
+// ReplicaMetricsFieldBody is the selection set for replica metrics.
+const ReplicaMetricsFieldBody = `{
+      measurement
+      replicaName
+      values {
+        ts
+        value
+      }
+    }`
+
+// HttpDurationMetricsFieldBody is the selection set for HTTP duration metrics.
+const HttpDurationMetricsFieldBody = `{
+      samples {
+        ts
+        p50
+        p90
+        p95
+        p99
+      }
+    }`
+
+// HttpMetricsGroupedByStatusFieldBody is the selection set for HTTP metrics grouped by status.
+const HttpMetricsGroupedByStatusFieldBody = `{
+      statusCode
+      samples {
+        ts
+        value
+      }
+    }`
+
+// UsageFieldBody is the selection set for aggregated usage.
+const UsageFieldBody = `{
+      measurement
+      value
+      tags {
+        projectId
+        serviceId
+        environmentId
+      }
+    }`
+
+// EstimatedUsageFieldBody is the selection set for estimated usage.
+const EstimatedUsageFieldBody = `{
+      estimatedValue
+      measurement
+      projectId
+    }`
 
 // SanitizeAlias converts an ID (which may contain hyphens) into a valid
 // GraphQL alias. GraphQL aliases must match [_A-Za-z][_0-9A-Za-z]*.
