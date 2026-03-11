@@ -152,8 +152,8 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 			break
 		}
 
-		compositeKey := target.ServiceID + ":" + target.EnvironmentID
-		coverageKey := CoverageKey(compositeKey, "service-metric")
+		compositeKey := target.CompositeKey()
+		coverageKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
 		existing, err := LoadCoverage(g.store, coverageKey)
 		if err != nil {
 			g.logger.Warn("failed to load service metric coverage",
@@ -341,7 +341,7 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, "service-metric")
+		coverageKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr != nil {
 			g.logger.Warn("failed to load service metric coverage",

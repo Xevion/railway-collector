@@ -15,6 +15,17 @@ const (
 	CoverageEmpty
 )
 
+// Coverage type suffixes used in coverage keys across all generators.
+const (
+	CoverageTypeMetric        = "metric"
+	CoverageTypeServiceMetric = "service-metric"
+	CoverageTypeReplicaMetric = "replica-metric"
+	CoverageTypeHTTPMetric    = "http-metric"
+	CoverageTypeLogEnv        = "log:environment"
+	CoverageTypeLogBuild      = "log:build"
+	CoverageTypeLogHTTP       = "log:http"
+)
+
 // CoverageInterval represents a time range that has been collected (or checked).
 type CoverageInterval struct {
 	Start      time.Time    `json:"start"`

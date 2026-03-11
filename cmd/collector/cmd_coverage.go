@@ -6,8 +6,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/xevion/railway-collector/internal/cli"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
 
@@ -46,11 +49,6 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 	entries, err := reader.CoverageEntries()
 	if err != nil {
 		return fmt.Errorf("reading coverage: %w", err)
-	}
-
-	if len(entries) == 0 {
-		fmt.Println("No coverage data found.")
-		return nil
 	}
 
 	f := formatter(c.JSON)
@@ -122,13 +120,50 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 		return cmd.renderIntervals(c, f, entries)
 	}
 
-	// Summary mode: window is now minus retention (90 days) to now
+	// Summary mode
 	now := time.Now()
-	windowStart := now.Add(-90 * 24 * time.Hour)
+
+	// Load config for retention windows and expected stream enumeration
+	_ = godotenv.Load()
+	cfg, err := config.Load(c.Config)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	metricWindowStart := now.Add(-cfg.Collect.GapFill.MetricRetention)
+	logWindowStart := now.Add(-cfg.Collect.GapFill.LogRetention)
 
 	// Build name resolver from discovery cache
 	resolver := buildNameResolver(reader)
-	summaries := buildCoverageSummaries(entries, windowStart, now, resolver)
+
+	// Enumerate expected coverage keys from config + discovery
+	targets := extractDiscoveryTargets(reader)
+	expected := expectedCoverageKeys(cfg, targets)
+
+	// Inject synthetic empty entries for expected keys missing from the database
+	actualKeys := make(map[string]struct{})
+	for _, e := range entries {
+		actualKeys[e.Key] = struct{}{}
+	}
+	emptyIntervals, _ := json.Marshal([]collector.CoverageInterval{})
+	for key := range expected {
+		if _, exists := actualKeys[key]; !exists {
+			entries = append(entries, state.RawEntry{Key: key, Value: emptyIntervals})
+		}
+	}
+
+	// Partition entries by stream type and compute summaries with appropriate windows
+	var metricEntries, logEntries []state.RawEntry
+	for _, e := range entries {
+		if isLogCoverageKey(e.Key) {
+			logEntries = append(logEntries, e)
+		} else {
+			metricEntries = append(metricEntries, e)
+		}
+	}
+
+	var summaries []coverageSummary
+	summaries = append(summaries, buildCoverageSummaries(metricEntries, metricWindowStart, now, resolver)...)
+	summaries = append(summaries, buildCoverageSummaries(logEntries, logWindowStart, now, resolver)...)
 
 	if c.JSON {
 		var jsonOut []coverageSummaryJSON
@@ -163,7 +198,7 @@ func (cmd *CoverageCmd) Run(c *CLI) error {
 	}
 	tree := tb.Build()
 	title := fmt.Sprintf("Coverage Report - %d streams, %s window",
-		len(summaries), cli.FormatDuration(now.Sub(windowStart)))
+		len(summaries), cli.FormatDuration(now.Sub(metricWindowStart)))
 	cli.RenderTree(os.Stdout, tree, title)
 	return nil
 }

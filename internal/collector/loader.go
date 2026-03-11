@@ -21,7 +21,7 @@ const (
 	BreadthHttpLogs                   = 21
 	BreadthHttpDurationMetrics        = 5
 	BreadthHttpMetricsGroupedByStatus = 5
-	BreadthReplicaMetrics             = 12 // TODO: verify via API error message
+	BreadthReplicaMetrics             = 12 // assumed same as BreadthMetrics; same selection set shape
 	BreadthNetworkFlowServiceLayer    = 11
 	BreadthUsage                      = 12
 	BreadthEstimatedUsage             = 5

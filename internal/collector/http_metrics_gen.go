@@ -155,8 +155,8 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 			break
 		}
 
-		compositeKey := target.ServiceID + ":" + target.EnvironmentID
-		coverageKey := CoverageKey(compositeKey, "http-metric")
+		compositeKey := target.CompositeKey()
+		coverageKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
 		existing, err := LoadCoverage(g.store, coverageKey)
 		if err != nil {
 			g.logger.Warn("failed to load http metric coverage",
@@ -397,7 +397,7 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	// Update coverage (duration is the primary coverage updater for both kinds)
 	compositeKey := serviceID + ":" + environmentID
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, "http-metric")
+		coverageKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr != nil {
 			g.logger.Warn("failed to load http metric coverage",

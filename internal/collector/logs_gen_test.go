@@ -184,6 +184,116 @@ func TestLogsGenerator_Poll_SkipsNoDeployment(t *testing.T) {
 	assert.Nil(t, items)
 }
 
+func TestLogsGenerator_Poll_GapChunking(t *testing.T) {
+	// Tests that large live-edge gaps in environment log coverage are chunked
+	// rather than emitted as a single work item.
+	tests := []struct {
+		name            string
+		retention       time.Duration
+		chunkSize       time.Duration
+		maxItems        int
+		wantMinItems    int
+		wantMaxOpenEnd  int // max items without beforeDate
+		wantMinChunked  int // min items with beforeDate
+		wantTotalCapped bool
+	}{
+		{
+			name:           "7d live-edge gap with 6h chunks",
+			retention:      7 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 1,
+		},
+		{
+			name:           "90d live-edge gap with 6h chunks",
+			retention:      90 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       500,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
+		{
+			name:           "gap smaller than chunk size stays single item",
+			retention:      1 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       50,
+			wantMinItems:   1,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 0,
+		},
+		{
+			name:            "maxItems caps output",
+			retention:       7 * 24 * time.Hour,
+			chunkSize:       6 * time.Hour,
+			maxItems:        5,
+			wantMinItems:    5,
+			wantMaxOpenEnd:  1,
+			wantMinChunked:  1,
+			wantTotalCapped: true,
+		},
+		{
+			name:           "1h chunks on 2d gap produces many items",
+			retention:      2 * 24 * time.Hour,
+			chunkSize:      1 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := mocks.NewMockStateStore(ctrl)
+			targets := mocks.NewMockTargetProvider(ctrl)
+			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+			now := fakeClock.Now()
+
+			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
+			})
+			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+			gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+				Discovery:       targets,
+				Store:           store,
+				Clock:           fakeClock,
+				Types:           []string{"deployment"},
+				Limit:           500,
+				Interval:        30 * time.Second,
+				LogRetention:    tt.retention,
+				ChunkSize:       tt.chunkSize,
+				MaxItemsPerPoll: tt.maxItems,
+				Logger:          slog.Default(),
+			})
+
+			items := gen.Poll(now)
+			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
+
+			// Logs use beforeDate (not endDate) for chunked items
+			var chunked, openEnded int
+			for _, item := range items {
+				if _, hasEnd := item.Params["beforeDate"]; hasEnd {
+					chunked++
+				} else {
+					openEnded++
+				}
+			}
+
+			assert.LessOrEqual(t, openEnded, tt.wantMaxOpenEnd, "open-ended item count")
+			assert.GreaterOrEqual(t, chunked, tt.wantMinChunked, "chunked item count")
+
+			if tt.wantTotalCapped {
+				assert.Equal(t, tt.maxItems, len(items), "output should be capped at maxItems")
+			}
+		})
+	}
+}
+
 func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)

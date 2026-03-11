@@ -150,7 +150,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 			}
 			seen[t.EnvironmentID] = true
 
-			coverageKey := CoverageKey(t.EnvironmentID, "log", "environment")
+			coverageKey := CoverageKey(t.EnvironmentID, CoverageTypeLogEnv)
 			existing, err := LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load env log coverage",
@@ -265,7 +265,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				continue
 			}
 
-			coverageKey := CoverageKey(t.DeploymentID, "log", "build")
+			coverageKey := CoverageKey(t.DeploymentID, CoverageTypeLogBuild)
 			existing, err := LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load build log coverage",
@@ -318,7 +318,7 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 				continue
 			}
 
-			coverageKey := CoverageKey(t.DeploymentID, "log", "http")
+			coverageKey := CoverageKey(t.DeploymentID, CoverageTypeLogHTTP)
 			existing, err := LoadCoverage(g.store, coverageKey)
 			if err != nil {
 				g.logger.Warn("failed to load HTTP log coverage",
@@ -495,7 +495,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(envID, "log", "environment")
+		coverageKey := CoverageKey(envID, CoverageTypeLogEnv)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr == nil {
 			kind := CoverageCollected
@@ -592,7 +592,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(deploymentID, "log", "build")
+		coverageKey := CoverageKey(deploymentID, CoverageTypeLogBuild)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr == nil {
 			kind := CoverageCollected
@@ -700,7 +700,7 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(deploymentID, "log", "http")
+		coverageKey := CoverageKey(deploymentID, CoverageTypeLogHTTP)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr == nil {
 			kind := CoverageCollected

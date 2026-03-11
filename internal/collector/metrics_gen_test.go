@@ -316,70 +316,119 @@ func TestProjectMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	// No panic, coverage updated (gomock verifies SetCoverage was called)
 }
 
-func TestProjectMetricsGenerator_Poll_LargeLiveEdgeGap_ChunksOlderPortion(t *testing.T) {
-	// BUG: When a coverage gap extends from far in the past to "now", the
-	// isLiveEdge check (now.Sub(gap.End) < time.Minute) is true because
-	// gap.End IS near now. This causes the entire gap to be emitted as a
-	// single open-ended work item, bypassing chunking. A 90-day gap at 30s
-	// granularity would request ~260k points — well beyond the API limit.
-	//
-	// Expected: the older portion of the gap should be chunked, with only
-	// the most recent portion using an open-ended live-edge query.
-
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	now := fakeClock.Now()
-	chunkSize := 6 * time.Hour
-	// Retention of 7 days means the gap spans 7 days — far larger than one chunk.
-	retention := 7 * 24 * time.Hour
-
-	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
-		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
-	})
-
-	// No coverage at all — produces one gap from (now - retention) to now
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
-
-	gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
-		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:      30,
-		AvgWindow:       30,
-		Interval:        30 * time.Second,
-		MetricRetention: retention,
-		ChunkSize:       chunkSize,
-		MaxItemsPerPoll: 50, // high limit so we can see all items
-		Logger:          slog.Default(),
-	})
-
-	items := gen.Poll(now)
-	require.NotEmpty(t, items)
-
-	// The gap spans 7 days. With 6h chunks that's 28 chunks. Regardless of
-	// exact count, emitting a SINGLE item for the whole gap is the bug.
-	assert.Greater(t, len(items), 1,
-		"a 7-day live-edge gap must be split into multiple work items, not emitted as one")
-
-	// Count how many items have an endDate (chunked) vs open-ended (live edge).
-	var chunked, openEnded int
-	for _, item := range items {
-		if _, hasEnd := item.Params["endDate"]; hasEnd {
-			chunked++
-		} else {
-			openEnded++
-		}
+func TestProjectMetricsGenerator_Poll_GapChunking(t *testing.T) {
+	tests := []struct {
+		name            string
+		retention       time.Duration
+		chunkSize       time.Duration
+		maxItems        int
+		wantMinItems    int  // minimum total items expected
+		wantMaxOpenEnd  int  // max open-ended items (no endDate)
+		wantMinChunked  int  // minimum chunked items (with endDate)
+		wantTotalCapped bool // true if maxItems should cap output
+	}{
+		{
+			name:           "7d live-edge gap with 6h chunks",
+			retention:      7 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 1,
+		},
+		{
+			name:           "90d live-edge gap with 6h chunks",
+			retention:      90 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       500,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
+		{
+			name:           "gap smaller than chunk size stays single item",
+			retention:      1 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       50,
+			wantMinItems:   1,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 0,
+		},
+		{
+			name:           "gap exactly one chunk size",
+			retention:      6 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       50,
+			wantMinItems:   1,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 0,
+		},
+		{
+			name:            "maxItems caps output",
+			retention:       7 * 24 * time.Hour,
+			chunkSize:       6 * time.Hour,
+			maxItems:        5,
+			wantMinItems:    5,
+			wantMaxOpenEnd:  1,
+			wantMinChunked:  1,
+			wantTotalCapped: true,
+		},
+		{
+			name:           "1h chunks on 2d gap produces many items",
+			retention:      2 * 24 * time.Hour,
+			chunkSize:      1 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
 	}
 
-	// At most one item should be open-ended (the live-edge tail).
-	assert.LessOrEqual(t, openEnded, 1,
-		"at most one work item should be open-ended (live edge)")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := mocks.NewMockStateStore(ctrl)
+			targets := mocks.NewMockTargetProvider(ctrl)
+			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+			now := fakeClock.Now()
 
-	// The majority should be chunked with explicit endDate.
-	assert.Greater(t, chunked, 0,
-		"older portions of the gap must be chunked with explicit endDate")
+			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
+			})
+			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+			gen := collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
+				Discovery:       targets,
+				Store:           store,
+				Clock:           fakeClock,
+				Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+				SampleRate:      30,
+				AvgWindow:       30,
+				Interval:        30 * time.Second,
+				MetricRetention: tt.retention,
+				ChunkSize:       tt.chunkSize,
+				MaxItemsPerPoll: tt.maxItems,
+				Logger:          slog.Default(),
+			})
+
+			items := gen.Poll(now)
+			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
+
+			var chunked, openEnded int
+			for _, item := range items {
+				if _, hasEnd := item.Params["endDate"]; hasEnd {
+					chunked++
+				} else {
+					openEnded++
+				}
+			}
+
+			assert.LessOrEqual(t, openEnded, tt.wantMaxOpenEnd, "open-ended item count")
+			assert.GreaterOrEqual(t, chunked, tt.wantMinChunked, "chunked item count")
+
+			if tt.wantTotalCapped {
+				assert.Equal(t, tt.maxItems, len(items), "output should be capped at maxItems")
+			}
+		})
+	}
 }

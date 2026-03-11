@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
 
@@ -209,6 +210,48 @@ func TestCoverage_KeyResolution(t *testing.T) {
 		"uuid-2:log:environment should resolve to my-project/my-service:log:environment")
 	assert.True(t, keys["other-project/build-svc:log:build"],
 		"uuid-3:log:build should resolve to other-project/build-svc:log:build")
+}
+
+func TestCoverage_KeyResolution_CompositeKeys(t *testing.T) {
+	windowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
+
+	entries := []state.RawEntry{
+		makeEntry(t, "svc-1:env-1:service-metric", []collector.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		}),
+		makeEntry(t, "svc-1:env-1:replica-metric", []collector.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		}),
+		makeEntry(t, "svc-2:env-1:http-metric", []collector.CoverageInterval{
+			{Start: windowStart, End: windowEnd, Kind: collector.CoverageCollected},
+		}),
+	}
+
+	resolver := func(id string) string {
+		switch id {
+		case "svc-1:env-1":
+			return "my-project/web"
+		case "svc-2:env-1":
+			return "my-project/api"
+		default:
+			return ""
+		}
+	}
+
+	summaries := buildCoverageSummaries(entries, windowStart, windowEnd, resolver)
+	require.Len(t, summaries, 3)
+
+	keys := make(map[string]bool)
+	for _, s := range summaries {
+		keys[s.Key] = true
+	}
+	assert.True(t, keys["my-project/web:service-metric"],
+		"svc-1:env-1:service-metric should resolve to my-project/web:service-metric")
+	assert.True(t, keys["my-project/web:replica-metric"],
+		"svc-1:env-1:replica-metric should resolve to my-project/web:replica-metric")
+	assert.True(t, keys["my-project/api:http-metric"],
+		"svc-2:env-1:http-metric should resolve to my-project/api:http-metric")
 }
 
 func TestCoverage_KeyResolution_UnknownID(t *testing.T) {
@@ -514,10 +557,230 @@ func TestParseCoverageSegments(t *testing.T) {
 		{"runnerspace:metric", []string{"runnerspace", "metric"}},
 		{"bare-key", []string{"bare-key"}},
 		{"proj:newtype", []string{"proj", "newtype"}},
+		// Composite keys (after resolution) produce project/service + type segments
+		{"my-project/web:service-metric", []string{"my-project", "web", "service-metric"}},
+		{"my-project/web:replica-metric", []string{"my-project", "web", "replica-metric"}},
+		{"my-project/api:http-metric", []string{"my-project", "api", "http-metric"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
 			assert.Equal(t, tt.want, parseCoverageSegments(tt.key))
 		})
 	}
+}
+
+// testTargets returns the standard 3-target set used across expectedCoverageKeys tests.
+func testTargets() []collector.ServiceTarget {
+	return []collector.ServiceTarget{
+		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"},
+		{ProjectID: "proj-1", ServiceID: "svc-2", EnvironmentID: "env-1", DeploymentID: "dep-2"},
+		{ProjectID: "proj-2", ServiceID: "svc-3", EnvironmentID: "env-2", DeploymentID: ""},
+	}
+}
+
+func TestExpectedCoverageKeys_AllEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	targets := testTargets()
+	keys := expectedCoverageKeys(cfg, targets)
+
+	// Project-level metric keys: 2 unique projects
+	assert.Contains(t, keys, "proj-1:metric")
+	assert.Contains(t, keys, "proj-2:metric")
+
+	// Service metric keys: 3 composite keys
+	assert.Contains(t, keys, "svc-1:env-1:service-metric")
+	assert.Contains(t, keys, "svc-2:env-1:service-metric")
+	assert.Contains(t, keys, "svc-3:env-2:service-metric")
+
+	// Replica metric keys
+	assert.Contains(t, keys, "svc-1:env-1:replica-metric")
+	assert.Contains(t, keys, "svc-2:env-1:replica-metric")
+	assert.Contains(t, keys, "svc-3:env-2:replica-metric")
+
+	// HTTP metric keys
+	assert.Contains(t, keys, "svc-1:env-1:http-metric")
+	assert.Contains(t, keys, "svc-2:env-1:http-metric")
+	assert.Contains(t, keys, "svc-3:env-2:http-metric")
+
+	// Log environment keys: 2 unique environments
+	assert.Contains(t, keys, "env-1:log:environment")
+	assert.Contains(t, keys, "env-2:log:environment")
+
+	// Log build keys: only targets with DeploymentID (2 of 3)
+	assert.Contains(t, keys, "dep-1:log:build")
+	assert.Contains(t, keys, "dep-2:log:build")
+
+	// Log http keys: same deployment-bearing targets
+	assert.Contains(t, keys, "dep-1:log:http")
+	assert.Contains(t, keys, "dep-2:log:http")
+
+	// Total: 2 project + 3*3 service/replica/http + 2 env + 2 build + 2 http = 17
+	assert.Len(t, keys, 17)
+}
+
+func TestExpectedCoverageKeys_MetricsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Collect.Metrics.Enabled = false
+	targets := testTargets()
+	keys := expectedCoverageKeys(cfg, targets)
+
+	// No metric keys at all
+	for k := range keys {
+		assert.NotContains(t, k, "metric",
+			"no metric keys should exist when metrics disabled, got %q", k)
+	}
+
+	// Should still have log keys
+	assert.Contains(t, keys, "env-1:log:environment")
+	assert.Contains(t, keys, "env-2:log:environment")
+	assert.Contains(t, keys, "dep-1:log:build")
+	assert.Contains(t, keys, "dep-2:log:build")
+	assert.Contains(t, keys, "dep-1:log:http")
+	assert.Contains(t, keys, "dep-2:log:http")
+
+	// Total: 2 env + 2 build + 2 http = 6
+	assert.Len(t, keys, 6)
+}
+
+func TestExpectedCoverageKeys_ServiceMetricsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Collect.Metrics.Service.Enabled = false
+	cfg.Collect.Metrics.Replica.Enabled = false
+	cfg.Collect.Metrics.HTTP.Enabled = false
+	targets := testTargets()
+	keys := expectedCoverageKeys(cfg, targets)
+
+	// Should have project-level metric keys only
+	assert.Contains(t, keys, "proj-1:metric")
+	assert.Contains(t, keys, "proj-2:metric")
+
+	// No service/replica/http metric keys
+	for k := range keys {
+		assert.NotContains(t, k, "service-metric",
+			"no service-metric keys expected, got %q", k)
+		assert.NotContains(t, k, "replica-metric",
+			"no replica-metric keys expected, got %q", k)
+		assert.NotContains(t, k, "http-metric",
+			"no http-metric keys expected, got %q", k)
+	}
+
+	// Should still have log keys
+	assert.Contains(t, keys, "env-1:log:environment")
+	assert.Contains(t, keys, "dep-1:log:build")
+
+	// Total: 2 project + 2 env + 2 build + 2 http = 8
+	assert.Len(t, keys, 8)
+}
+
+func TestExpectedCoverageKeys_LogsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Collect.Logs.Enabled = false
+	targets := testTargets()
+	keys := expectedCoverageKeys(cfg, targets)
+
+	// No log keys
+	for k := range keys {
+		assert.NotContains(t, k, "log:",
+			"no log keys should exist when logs disabled, got %q", k)
+	}
+
+	// Should have all metric keys
+	assert.Contains(t, keys, "proj-1:metric")
+	assert.Contains(t, keys, "proj-2:metric")
+	assert.Contains(t, keys, "svc-1:env-1:service-metric")
+	assert.Contains(t, keys, "svc-1:env-1:replica-metric")
+	assert.Contains(t, keys, "svc-1:env-1:http-metric")
+
+	// Total: 2 project + 3*3 service/replica/http = 11
+	assert.Len(t, keys, 11)
+}
+
+func TestExpectedCoverageKeys_PartialLogTypes(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Collect.Logs.Types = []string{"deployment"}
+	targets := testTargets()
+	keys := expectedCoverageKeys(cfg, targets)
+
+	// Should have log:environment (deployment type maps to env logs)
+	assert.Contains(t, keys, "env-1:log:environment")
+	assert.Contains(t, keys, "env-2:log:environment")
+
+	// Should NOT have log:build or log:http
+	for k := range keys {
+		assert.NotContains(t, k, "log:build",
+			"no log:build keys expected with only deployment type, got %q", k)
+		assert.NotContains(t, k, "log:http",
+			"no log:http keys expected with only deployment type, got %q", k)
+	}
+
+	// Total: 2 project + 9 service-level + 2 env = 13
+	assert.Len(t, keys, 13)
+}
+
+func TestIsLogCoverageKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{"proj-1:metric", false},
+		{"svc-1:env-1:service-metric", false},
+		{"env-1:log:environment", true},
+		{"dep-1:log:build", true},
+		{"dep-1:log:http", true},
+		{"svc-1:env-1:replica-metric", false},
+		{"svc-1:env-1:http-metric", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			assert.Equal(t, tt.want, isLogCoverageKey(tt.key))
+		})
+	}
+}
+
+func TestCoverage_SyntheticEntriesAppear(t *testing.T) {
+	windowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
+
+	// Real entry with 30 min of coverage
+	realEntry := makeEntry(t, "proj-1:metric", []collector.CoverageInterval{
+		{
+			Start: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			End:   time.Date(2025, 1, 1, 0, 30, 0, 0, time.UTC),
+			Kind:  collector.CoverageCollected,
+		},
+	})
+
+	// Synthetic entry with empty intervals (represents a key with no data)
+	emptyJSON, err := json.Marshal([]collector.CoverageInterval{})
+	require.NoError(t, err)
+	syntheticEntry := state.RawEntry{Key: "svc-1:env-1:service-metric", Value: emptyJSON}
+
+	noopResolver := func(id string) string { return id }
+	summaries := buildCoverageSummaries(
+		[]state.RawEntry{realEntry, syntheticEntry},
+		windowStart, windowEnd, noopResolver,
+	)
+
+	require.Len(t, summaries, 2, "should produce summaries for both real and synthetic entries")
+
+	byKey := make(map[string]coverageSummary)
+	for _, s := range summaries {
+		byKey[s.Key] = s
+	}
+
+	// Real entry: 30 min collected out of 60 min window = 50%
+	real := byKey["proj-1:metric"]
+	assert.InDelta(t, 50.0, real.Percentage, 0.01)
+	assert.True(t, real.Collected > 0, "real entry should have non-zero collected time")
+
+	// Synthetic entry: 0% coverage, entire window is one gap
+	synthetic := byKey["svc-1:env-1:service-metric"]
+	assert.InDelta(t, 0.0, synthetic.Percentage, 0.01, "synthetic entry should have 0%% coverage")
+	assert.Equal(t, 1, synthetic.GapCount, "synthetic entry should have 1 gap (entire window)")
+	assert.Equal(t, time.Hour, synthetic.LargestGap, "synthetic entry largest gap should equal full window")
+}
+
+func TestCompositeKey(t *testing.T) {
+	target := collector.ServiceTarget{ServiceID: "svc-1", EnvironmentID: "env-1"}
+	assert.Equal(t, "svc-1:env-1", target.CompositeKey())
 }

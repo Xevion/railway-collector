@@ -27,6 +27,12 @@ type ServiceTarget struct {
 	Region       string
 }
 
+// CompositeKey returns the service:environment composite key used for
+// per-service coverage tracking and work item aliasing.
+func (t ServiceTarget) CompositeKey() string {
+	return t.ServiceID + ":" + t.EnvironmentID
+}
+
 // compiledFilter holds an original filter string and its pre-compiled regex (if valid).
 type compiledFilter struct {
 	raw string

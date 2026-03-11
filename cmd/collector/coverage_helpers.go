@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/config"
 	"github.com/xevion/railway-collector/internal/state"
 )
 
@@ -112,6 +113,10 @@ func buildNameResolver(reader interface {
 			if t.DeploymentID != "" {
 				idToName[t.DeploymentID] = label
 			}
+			// Composite key (ServiceID:EnvironmentID) → project/service
+			if t.ServiceID != "" && t.EnvironmentID != "" {
+				idToName[t.CompositeKey()] = label
+			}
 		}
 	}
 
@@ -120,12 +125,37 @@ func buildNameResolver(reader interface {
 	}
 }
 
-// resolveKey parses the first segment of a colon-separated key as an ID,
-// calls nameResolver to get a human-readable name, and rebuilds the key.
+// coverageTypeSuffixes lists known coverage type suffixes, longest first
+// to avoid partial matches (e.g. ":metric" matching ":service-metric").
+var coverageTypeSuffixes = []string{
+	":" + collector.CoverageTypeServiceMetric,
+	":" + collector.CoverageTypeReplicaMetric,
+	":" + collector.CoverageTypeHTTPMetric,
+	":" + collector.CoverageTypeLogEnv,
+	":" + collector.CoverageTypeLogBuild,
+	":" + collector.CoverageTypeLogHTTP,
+	":" + collector.CoverageTypeMetric,
+}
+
+// resolveKey translates IDs in a coverage key to human-readable names.
+// Handles both simple keys (projectID:metric) and composite keys
+// (serviceID:envID:service-metric) by matching known coverage type suffixes.
 func resolveKey(key string, nameResolver func(id string) string) string {
+	// Try known suffixes to correctly separate the ID portion from the type
+	for _, suffix := range coverageTypeSuffixes {
+		if strings.HasSuffix(key, suffix) {
+			id := key[:len(key)-len(suffix)]
+			resolved := nameResolver(id)
+			if resolved != "" {
+				return resolved + suffix
+			}
+			return key
+		}
+	}
+
+	// Fallback for unknown types: split at first colon
 	idx := strings.Index(key, ":")
 	if idx < 0 {
-		// No colon — the whole key is the ID
 		resolved := nameResolver(key)
 		if resolved == "" {
 			return key
@@ -165,6 +195,104 @@ func parseCoverageSegments(key string) []string {
 	segments = append(segments, typeStr)
 
 	return segments
+}
+
+// extractDiscoveryTargets reads the discovery cache and returns all service targets.
+func extractDiscoveryTargets(reader interface {
+	DiscoveryEntries() ([]state.RawEntry, error)
+}) []collector.ServiceTarget {
+	entries, err := reader.DiscoveryEntries()
+	if err != nil {
+		return nil
+	}
+	var targets []collector.ServiceTarget
+	for _, e := range entries {
+		var cached collector.PersistedProjectCache
+		if err := json.Unmarshal(e.Value, &cached); err != nil {
+			continue
+		}
+		targets = append(targets, cached.Targets...)
+	}
+	return targets
+}
+
+// expectedCoverageKeys builds the set of coverage keys that should exist based on
+// which generators are enabled in the config and what targets exist in discovery.
+func expectedCoverageKeys(cfg *config.Config, targets []collector.ServiceTarget) map[string]struct{} {
+	keys := make(map[string]struct{})
+
+	// Deduplicate project IDs for project-level metrics
+	seenProjects := make(map[string]struct{})
+	// Deduplicate composite keys for service-level metrics
+	seenComposite := make(map[string]struct{})
+	// Deduplicate environment IDs for env logs
+	seenEnvs := make(map[string]struct{})
+	// Deduplicate deployment IDs for build/http logs
+	seenDeployments := make(map[string]struct{})
+
+	for _, t := range targets {
+		seenProjects[t.ProjectID] = struct{}{}
+		if t.ServiceID != "" && t.EnvironmentID != "" {
+			seenComposite[t.CompositeKey()] = struct{}{}
+		}
+		if t.EnvironmentID != "" {
+			seenEnvs[t.EnvironmentID] = struct{}{}
+		}
+		if t.DeploymentID != "" {
+			seenDeployments[t.DeploymentID] = struct{}{}
+		}
+	}
+
+	if cfg.Collect.Metrics.Enabled {
+		for pid := range seenProjects {
+			keys[collector.CoverageKey(pid, collector.CoverageTypeMetric)] = struct{}{}
+		}
+		if cfg.Collect.Metrics.Service.Enabled {
+			for ck := range seenComposite {
+				keys[collector.CoverageKey(ck, collector.CoverageTypeServiceMetric)] = struct{}{}
+			}
+		}
+		if cfg.Collect.Metrics.Replica.Enabled {
+			for ck := range seenComposite {
+				keys[collector.CoverageKey(ck, collector.CoverageTypeReplicaMetric)] = struct{}{}
+			}
+		}
+		if cfg.Collect.Metrics.HTTP.Enabled {
+			for ck := range seenComposite {
+				keys[collector.CoverageKey(ck, collector.CoverageTypeHTTPMetric)] = struct{}{}
+			}
+		}
+	}
+
+	if cfg.Collect.Logs.Enabled {
+		// Check which log types are enabled
+		logTypes := make(map[string]struct{})
+		for _, lt := range cfg.Collect.Logs.Types {
+			logTypes[lt] = struct{}{}
+		}
+		if _, ok := logTypes["deployment"]; ok {
+			for envID := range seenEnvs {
+				keys[collector.CoverageKey(envID, collector.CoverageTypeLogEnv)] = struct{}{}
+			}
+		}
+		if _, ok := logTypes["build"]; ok {
+			for depID := range seenDeployments {
+				keys[collector.CoverageKey(depID, collector.CoverageTypeLogBuild)] = struct{}{}
+			}
+		}
+		if _, ok := logTypes["http"]; ok {
+			for depID := range seenDeployments {
+				keys[collector.CoverageKey(depID, collector.CoverageTypeLogHTTP)] = struct{}{}
+			}
+		}
+	}
+
+	return keys
+}
+
+// isLogCoverageKey returns true if the coverage key is for a log stream.
+func isLogCoverageKey(key string) bool {
+	return strings.Contains(key, ":log:")
 }
 
 // formatSummaryRows converts coverage summaries into table-ready string slices.

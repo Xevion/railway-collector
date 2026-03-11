@@ -240,7 +240,7 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []WorkItem {
 			break
 		}
 
-		coverageKey := CoverageKey(pid, "metric")
+		coverageKey := CoverageKey(pid, CoverageTypeMetric)
 		existing, err := LoadCoverage(g.store, coverageKey)
 		if err != nil {
 			g.logger.Warn("failed to load metric coverage",
@@ -406,7 +406,7 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(projectID, "metric")
+		coverageKey := CoverageKey(projectID, CoverageTypeMetric)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr != nil {
 			g.logger.Warn("failed to load metric coverage",

@@ -216,7 +216,7 @@ func (g *UsageGenerator) deliverUsage(
 	var points []sink.MetricPoint
 
 	for _, result := range results {
-		metricName := "railway_usage_" + strings.ToLower(result.Measurement)
+		metricName := usageMetricName("railway_usage", result.Measurement)
 
 		labels := make(map[string]string)
 		if result.Tags.ProjectID != nil {
@@ -304,7 +304,7 @@ func (g *UsageGenerator) deliverEstimatedUsage(
 	var points []sink.MetricPoint
 
 	for _, result := range results {
-		metricName := "railway_estimated_usage_" + strings.ToLower(result.Measurement)
+		metricName := usageMetricName("railway_estimated_usage", result.Measurement)
 
 		labels := map[string]string{
 			"project_id": result.ProjectID,

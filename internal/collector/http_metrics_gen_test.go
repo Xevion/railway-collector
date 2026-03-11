@@ -99,6 +99,105 @@ func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
 	}
 }
 
+func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
+	// HTTP metrics always include endDate (even live-edge), so all items are
+	// "chunked" from the endDate perspective. The test verifies that large gaps
+	// produce multiple items rather than a single oversized one.
+	tests := []struct {
+		name            string
+		retention       time.Duration
+		chunkSize       time.Duration
+		maxItems        int
+		wantMinItems    int // minimum total items (each gap position emits 2: duration + status)
+		wantTotalCapped bool
+	}{
+		{
+			name:         "7d live-edge gap with 6h chunks",
+			retention:    7 * 24 * time.Hour,
+			chunkSize:    6 * time.Hour,
+			maxItems:     400,
+			wantMinItems: 4, // at least 2 chunk positions * 2 kinds
+		},
+		{
+			name:         "90d live-edge gap with 6h chunks",
+			retention:    90 * 24 * time.Hour,
+			chunkSize:    6 * time.Hour,
+			maxItems:     1000,
+			wantMinItems: 20, // many chunk positions * 2 kinds
+		},
+		{
+			name:         "gap smaller than chunk size stays single pair",
+			retention:    1 * time.Hour,
+			chunkSize:    6 * time.Hour,
+			maxItems:     50,
+			wantMinItems: 2, // 1 position * 2 kinds
+		},
+		{
+			name:            "maxItems caps output",
+			retention:       7 * 24 * time.Hour,
+			chunkSize:       6 * time.Hour,
+			maxItems:        6,
+			wantMinItems:    6,
+			wantTotalCapped: true,
+		},
+		{
+			name:         "1h chunks on 2d gap produces many items",
+			retention:    2 * 24 * time.Hour,
+			chunkSize:    1 * time.Hour,
+			maxItems:     400,
+			wantMinItems: 20,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := mocks.NewMockStateStore(ctrl)
+			targets := mocks.NewMockTargetProvider(ctrl)
+			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+			now := fakeClock.Now()
+
+			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
+			})
+			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+			gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery:       targets,
+				Store:           store,
+				Clock:           fakeClock,
+				Interval:        30 * time.Second,
+				MetricRetention: tt.retention,
+				ChunkSize:       tt.chunkSize,
+				MaxItemsPerPoll: tt.maxItems,
+				StepSeconds:     60,
+				Logger:          slog.Default(),
+			})
+
+			items := gen.Poll(now)
+			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
+
+			// All HTTP metric items must have endDate
+			for _, item := range items {
+				_, hasEnd := item.Params["endDate"]
+				assert.True(t, hasEnd, "all HTTP metric items must have endDate, got item %s", item.ID)
+			}
+
+			// Verify we get both kinds
+			kindCounts := make(map[collector.QueryKind]int)
+			for _, item := range items {
+				kindCounts[item.Kind]++
+			}
+			assert.Greater(t, kindCounts[collector.QueryHttpDurationMetrics], 0, "should have duration items")
+			assert.Greater(t, kindCounts[collector.QueryHttpMetricsGroupedByStatus], 0, "should have status items")
+
+			if tt.wantTotalCapped {
+				assert.LessOrEqual(t, len(items), tt.maxItems, "output should be capped at maxItems")
+			}
+		})
+	}
+}
+
 func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
@@ -272,4 +371,72 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 	}
 	assert.Equal(t, 42.0, statusValues["200"])
 	assert.Equal(t, 3.0, statusValues["500"])
+}
+
+func TestHttpMetricsGenerator_Deliver_HandlesError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"},
+	})
+
+	fakeSink := &recordingSink{}
+
+	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+		Discovery: targets,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     fakeClock,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	item := collector.WorkItem{
+		ID:       "http-duration:svc-1:env-1",
+		Kind:     collector.QueryHttpDurationMetrics,
+		AliasKey: "svc-1:env-1",
+	}
+
+	gen.Deliver(context.Background(), item, nil, assert.AnError)
+}
+
+func TestHttpMetricsGenerator_Deliver_EmptyDurationResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := mocks.NewMockStateStore(ctrl)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	now := fakeClock.Now()
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
+	}).AnyTimes()
+
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+		Discovery:   targets,
+		Store:       store,
+		Sinks:       []sink.Sink{&recordingSink{}},
+		Clock:       fakeClock,
+		Interval:    30 * time.Second,
+		StepSeconds: 60,
+		Logger:      slog.Default(),
+	})
+
+	// Empty duration response
+	data, _ := json.Marshal(map[string]any{"samples": []map[string]any{}})
+	item := collector.WorkItem{
+		ID:       "http-duration:svc-1:env-1",
+		Kind:     collector.QueryHttpDurationMetrics,
+		AliasKey: "svc-1:env-1",
+		Params: map[string]any{
+			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
+			"endDate":   now.Format(time.RFC3339),
+		},
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
 }

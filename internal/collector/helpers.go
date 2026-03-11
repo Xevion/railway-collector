@@ -1,6 +1,8 @@
 package collector
 
 import (
+	"strings"
+
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
@@ -26,6 +28,29 @@ var metricNameMap = map[railway.MetricMeasurement]string{
 	railway.MetricMeasurementDiskUsageGb:          "railway_disk_usage_gb",
 	railway.MetricMeasurementEphemeralDiskUsageGb: "railway_ephemeral_disk_usage_gb",
 	railway.MetricMeasurementBackupUsageGb:        "railway_backup_usage_gb",
+}
+
+// usageMetricSuffix maps measurement enum values to clean suffixes for usage
+// metric names, avoiding redundancy like "railway_usage_cpu_usage".
+var usageMetricSuffix = map[string]string{
+	"CPU_USAGE":               "cpu",
+	"CPU_LIMIT":               "cpu_limit",
+	"MEMORY_USAGE_GB":         "memory_gb",
+	"MEMORY_LIMIT_GB":         "memory_limit_gb",
+	"NETWORK_RX_GB":           "network_rx_gb",
+	"NETWORK_TX_GB":           "network_tx_gb",
+	"DISK_USAGE_GB":           "disk_gb",
+	"EPHEMERAL_DISK_USAGE_GB": "ephemeral_disk_gb",
+	"BACKUP_USAGE_GB":         "backup_gb",
+}
+
+// usageMetricName returns a clean metric name for billing/usage measurements,
+// using the given prefix (e.g. "railway_usage" or "railway_estimated_usage").
+func usageMetricName(prefix, measurement string) string {
+	if suffix, ok := usageMetricSuffix[measurement]; ok {
+		return prefix + "_" + suffix
+	}
+	return prefix + "_" + strings.ToLower(measurement)
 }
 
 func uniqueProjectIDs(targets []ServiceTarget) []string {

@@ -150,8 +150,8 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 			break
 		}
 
-		compositeKey := target.ServiceID + ":" + target.EnvironmentID
-		coverageKey := CoverageKey(compositeKey, "replica-metric")
+		compositeKey := target.CompositeKey()
+		coverageKey := CoverageKey(compositeKey, CoverageTypeReplicaMetric)
 		existing, err := LoadCoverage(g.store, coverageKey)
 		if err != nil {
 			g.logger.Warn("failed to load replica metric coverage",
@@ -330,7 +330,7 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, "replica-metric")
+		coverageKey := CoverageKey(compositeKey, CoverageTypeReplicaMetric)
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr != nil {
 			g.logger.Warn("failed to load replica metric coverage",

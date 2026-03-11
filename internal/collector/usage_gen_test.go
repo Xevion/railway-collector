@@ -156,7 +156,7 @@ func TestUsageGenerator_Deliver_Usage(t *testing.T) {
 	gen.Deliver(context.Background(), item, data, nil)
 
 	require.Len(t, collected, 1)
-	assert.Equal(t, "railway_usage_cpu_usage", collected[0].Name)
+	assert.Equal(t, "railway_usage_cpu", collected[0].Name)
 	assert.Equal(t, 123.45, collected[0].Value)
 	assert.Equal(t, "proj-1", collected[0].Labels["project_id"])
 	assert.Equal(t, "svc-1", collected[0].Labels["service_id"])
@@ -209,8 +209,61 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 	gen.Deliver(context.Background(), item, data, nil)
 
 	require.Len(t, collected, 1)
-	assert.Equal(t, "railway_estimated_usage_cpu_usage", collected[0].Name)
+	assert.Equal(t, "railway_estimated_usage_cpu", collected[0].Name)
 	assert.Equal(t, 99.5, collected[0].Value)
 	assert.Equal(t, "proj-1", collected[0].Labels["project_id"])
 	assert.Equal(t, "test-project", collected[0].Labels["project_name"])
+}
+
+func TestUsageGenerator_Deliver_HandlesError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
+	})
+
+	fakeSink := &recordingSink{}
+
+	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+		Discovery: targets,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     fakeClock,
+		Logger:    slog.Default(),
+	})
+
+	item := collector.WorkItem{
+		ID:       "usage:proj-1",
+		Kind:     collector.QueryUsage,
+		AliasKey: "proj-1",
+	}
+
+	gen.Deliver(context.Background(), item, nil, assert.AnError)
+}
+
+func TestUsageGenerator_Deliver_EmptyResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
+	}).AnyTimes()
+
+	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+		Discovery: targets,
+		Sinks:     []sink.Sink{&recordingSink{}},
+		Clock:     fakeClock,
+		Logger:    slog.Default(),
+	})
+
+	data, _ := json.Marshal([]map[string]any{})
+	item := collector.WorkItem{
+		ID:       "usage:proj-1",
+		Kind:     collector.QueryUsage,
+		AliasKey: "proj-1",
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
 }

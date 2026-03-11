@@ -65,6 +65,114 @@ func TestReplicaMetricsGenerator_Poll_EmitsItems(t *testing.T) {
 	}
 }
 
+func TestReplicaMetricsGenerator_Poll_GapChunking(t *testing.T) {
+	tests := []struct {
+		name            string
+		retention       time.Duration
+		chunkSize       time.Duration
+		maxItems        int
+		wantMinItems    int
+		wantMaxOpenEnd  int
+		wantMinChunked  int
+		wantTotalCapped bool
+	}{
+		{
+			name:           "7d live-edge gap with 6h chunks",
+			retention:      7 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 1,
+		},
+		{
+			name:           "90d live-edge gap with 6h chunks",
+			retention:      90 * 24 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       500,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
+		{
+			name:           "gap smaller than chunk size stays single item",
+			retention:      1 * time.Hour,
+			chunkSize:      6 * time.Hour,
+			maxItems:       50,
+			wantMinItems:   1,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 0,
+		},
+		{
+			name:            "maxItems caps output",
+			retention:       7 * 24 * time.Hour,
+			chunkSize:       6 * time.Hour,
+			maxItems:        5,
+			wantMinItems:    5,
+			wantMaxOpenEnd:  1,
+			wantMinChunked:  1,
+			wantTotalCapped: true,
+		},
+		{
+			name:           "1h chunks on 2d gap produces many items",
+			retention:      2 * 24 * time.Hour,
+			chunkSize:      1 * time.Hour,
+			maxItems:       200,
+			wantMinItems:   2,
+			wantMaxOpenEnd: 1,
+			wantMinChunked: 10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := mocks.NewMockStateStore(ctrl)
+			targets := mocks.NewMockTargetProvider(ctrl)
+			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+			now := fakeClock.Now()
+
+			targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
+			})
+			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+			gen := collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+				Discovery:       targets,
+				Store:           store,
+				Clock:           fakeClock,
+				Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+				SampleRate:      30,
+				AvgWindow:       30,
+				Interval:        30 * time.Second,
+				MetricRetention: tt.retention,
+				ChunkSize:       tt.chunkSize,
+				MaxItemsPerPoll: tt.maxItems,
+				Logger:          slog.Default(),
+			})
+
+			items := gen.Poll(now)
+			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
+
+			var chunked, openEnded int
+			for _, item := range items {
+				if _, hasEnd := item.Params["endDate"]; hasEnd {
+					chunked++
+				} else {
+					openEnded++
+				}
+			}
+
+			assert.LessOrEqual(t, openEnded, tt.wantMaxOpenEnd, "open-ended item count")
+			assert.GreaterOrEqual(t, chunked, tt.wantMinChunked, "chunked item count")
+
+			if tt.wantTotalCapped {
+				assert.Equal(t, tt.maxItems, len(items), "output should be capped at maxItems")
+			}
+		})
+	}
+}
+
 func TestReplicaMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
@@ -142,4 +250,66 @@ func TestReplicaMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	assert.Equal(t, "env-1", collected[0].Labels["environment_id"])
 	assert.Equal(t, "test-service", collected[0].Labels["service_name"])
 	assert.Equal(t, "test-project", collected[0].Labels["project_name"])
+}
+
+func TestReplicaMetricsGenerator_Deliver_HandlesError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"},
+	})
+
+	fakeSink := &recordingSink{}
+
+	gen := collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+		Discovery: targets,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     fakeClock,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	item := collector.WorkItem{
+		ID:       "replica-metrics:svc-1:env-1",
+		AliasKey: "svc-1:env-1",
+	}
+
+	gen.Deliver(context.Background(), item, nil, assert.AnError)
+}
+
+func TestReplicaMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := mocks.NewMockStateStore(ctrl)
+	targets := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+
+	now := fakeClock.Now()
+
+	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
+		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
+	}).AnyTimes()
+
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+	gen := collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+		Discovery: targets,
+		Store:     store,
+		Clock:     fakeClock,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	data, _ := json.Marshal([]map[string]any{})
+	item := collector.WorkItem{
+		ID:       "replica-metrics:svc-1:env-1",
+		AliasKey: "svc-1:env-1",
+		Params: map[string]any{
+			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
 }
