@@ -201,6 +201,90 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 	assert.Equal(t, "test-project", collected[0].Labels["project_name"])
 }
 
+func TestUsageGenerator_Deliver_Usage_ProjectOnlyFallback(t *testing.T) {
+	env := setupGenTest(t)
+
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+		ProjectID:   "proj-1",
+		ProjectName: "test-project",
+		ServiceID:   "svc-1",
+		ServiceName: "test-service",
+	}}).AnyTimes()
+
+	var collected []sink.MetricPoint
+	fakeSink := &recordingSink{
+		writeMetrics: func(_ context.Context, pts []sink.MetricPoint) error {
+			collected = pts
+			return nil
+		},
+	}
+
+	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+		Discovery:    env.Targets,
+		Sinks:        []sink.Sink{fakeSink},
+		Clock:        env.Clock,
+		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		Logger:       slog.Default(),
+	})
+
+	rawData := []map[string]any{
+		{
+			"measurement": "CPU_USAGE",
+			"value":       50.0,
+			"tags": map[string]any{
+				"projectId": "proj-1",
+			},
+		},
+	}
+	data, err := json.Marshal(rawData)
+	require.NoError(t, err)
+
+	item := types.WorkItem{
+		Kind:     types.QueryUsage,
+		TaskType: types.TaskTypeUsage,
+		AliasKey: "proj-1",
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
+
+	require.Len(t, collected, 1)
+	assert.Equal(t, "proj-1", collected[0].Labels["project_id"])
+	assert.Equal(t, "test-project", collected[0].Labels["project_name"])
+	assert.NotContains(t, collected[0].Labels, "service_id")
+}
+
+func TestUsageGenerator_Deliver_Usage_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{
+			ID: "usage:proj-1", Kind: types.QueryUsage,
+			TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
+		},
+	)
+}
+
+func TestUsageGenerator_Deliver_EstimatedUsage_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{
+			ID: "estimated-usage:proj-1", Kind: types.QueryEstimatedUsage,
+			TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
+		},
+	)
+}
+
 func TestUsageGenerator_Deliver_HandlesError(t *testing.T) {
 	testDeliverHandlesError(t,
 		[]types.ServiceTarget{{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"}},

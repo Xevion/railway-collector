@@ -3,6 +3,7 @@ package collector_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,48 @@ func (g *stubGenerator) waitForDeliveries(t *testing.T, n int, timeout time.Dura
 	return d
 }
 
+// newTestScheduler creates a UnifiedScheduler wired to the provided dependencies
+// and a stable test configuration.
+func newTestScheduler(
+	t *testing.T,
+	fakeClock clockwork.Clock,
+	api types.RailwayAPI,
+	credits *credit.CreditAllocator,
+	logger *slog.Logger,
+	generators ...types.TaskGenerator,
+) *collector.UnifiedScheduler {
+	t.Helper()
+	return collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
+		Clock:        fakeClock,
+		API:          api,
+		Credits:      credits,
+		Generators:   generators,
+		Logger:       logger,
+		TickInterval: 100 * time.Millisecond,
+		MaxRPS:       100.0,
+	})
+}
+
+// newMetricsWorkItem creates a project-metrics WorkItem with standard test params.
+// projectID is used as the AliasKey and in the ID field. startDate and endDate
+// are ISO-8601 strings (e.g. "2025-01-01T00:00:00Z").
+func newMetricsWorkItem(projectID, startDate, endDate string) types.WorkItem {
+	return types.WorkItem{
+		ID:       "metrics:" + projectID,
+		Kind:     types.QueryMetrics,
+		TaskType: types.TaskTypeMetrics,
+		AliasKey: projectID,
+		BatchKey: "sr=30",
+		Params: map[string]any{
+			"startDate":         startDate,
+			"endDate":           endDate,
+			"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+			"groupBy":           []railway.MetricTag{railway.MetricTagServiceId},
+			"sampleRateSeconds": 30,
+		},
+	}
+}
+
 func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	api := mocks.NewMockRailwayAPI(ctrl)
@@ -87,30 +130,8 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 	gen := &stubGenerator{
 		taskType: types.TaskTypeMetrics,
 		pollItems: []types.WorkItem{
-			{
-				ID: "metrics:proj-a", Kind: types.QueryMetrics,
-				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
-				BatchKey: "sr=30",
-				Params: map[string]any{
-					"startDate":         "2025-01-01T00:00:00Z",
-					"endDate":           "2025-01-01T01:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds": 30,
-				},
-			},
-			{
-				ID: "metrics:proj-b", Kind: types.QueryMetrics,
-				TaskType: types.TaskTypeMetrics, AliasKey: "proj-b",
-				BatchKey: "sr=30",
-				Params: map[string]any{
-					"startDate":         "2025-01-02T00:00:00Z",
-					"endDate":           "2025-01-02T01:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds": 30,
-				},
-			},
+			newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z"),
+			newMetricsWorkItem("proj-b", "2025-01-02T00:00:00Z", "2025-01-02T01:00:00Z"),
 		},
 	}
 
@@ -131,15 +152,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
-	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        fakeClock,
-		API:          api,
-		Credits:      credits,
-		Generators:   []types.TaskGenerator{gen},
-		Logger:       slog.Default(),
-		TickInterval: 100 * time.Millisecond,
-		MaxRPS:       100.0,
-	})
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -165,21 +178,8 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	gen := &stubGenerator{
-		taskType: types.TaskTypeMetrics,
-		pollItems: []types.WorkItem{
-			{
-				ID: "metrics:proj-a", Kind: types.QueryMetrics,
-				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
-				BatchKey: "sr=30",
-				Params: map[string]any{
-					"startDate":         "2025-01-01T00:00:00Z",
-					"endDate":           "2025-01-01T01:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{},
-					"sampleRateSeconds": 30,
-				},
-			},
-		},
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
 	// Create allocator with exhausted credits.
@@ -190,15 +190,7 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 	credits.TryDeduct(types.TaskTypeMetrics, fakeClock.Now())
 	credits.TryDeduct(types.TaskTypeMetrics, fakeClock.Now())
 
-	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        fakeClock,
-		API:          api,
-		Credits:      credits,
-		Generators:   []types.TaskGenerator{gen},
-		Logger:       slog.Default(),
-		TickInterval: 100 * time.Millisecond,
-		MaxRPS:       100.0,
-	})
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -235,15 +227,7 @@ func TestUnifiedScheduler_DiscoverySpecialCase(t *testing.T) {
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
-	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        fakeClock,
-		API:          api,
-		Credits:      credits,
-		Generators:   []types.TaskGenerator{discoveryGen},
-		Logger:       slog.Default(),
-		TickInterval: 100 * time.Millisecond,
-		MaxRPS:       100.0,
-	})
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), discoveryGen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -264,21 +248,8 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	metricsGen := &stubGenerator{
-		taskType: types.TaskTypeMetrics,
-		pollItems: []types.WorkItem{
-			{
-				ID: "metrics:proj-a", Kind: types.QueryMetrics,
-				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
-				BatchKey: "sr=30",
-				Params: map[string]any{
-					"startDate":         "2025-01-01T00:00:00Z",
-					"endDate":           "2025-01-01T01:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{},
-					"sampleRateSeconds": 30,
-				},
-			},
-		},
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
 	logsGen := &stubGenerator{
@@ -314,15 +285,7 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
-	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        fakeClock,
-		API:          api,
-		Credits:      credits,
-		Generators:   []types.TaskGenerator{metricsGen, logsGen},
-		Logger:       slog.Default(),
-		TickInterval: 100 * time.Millisecond,
-		MaxRPS:       100.0,
-	})
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), metricsGen, logsGen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -419,21 +382,8 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	fakeClock := clockwork.NewFakeClock()
 
 	gen := &stubGenerator{
-		taskType: types.TaskTypeMetrics,
-		pollItems: []types.WorkItem{
-			{
-				ID: "metrics:proj-a", Kind: types.QueryMetrics,
-				TaskType: types.TaskTypeMetrics, AliasKey: "proj-a",
-				BatchKey: "sr=30",
-				Params: map[string]any{
-					"startDate":         "2025-01-01T00:00:00Z",
-					"endDate":           "2025-01-01T01:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{},
-					"sampleRateSeconds": 30,
-				},
-			},
-		},
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
 	}
 
 	aliasA := railway.SanitizeAlias("proj-a")
@@ -450,15 +400,7 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 
 	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
-	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        fakeClock,
-		API:          api,
-		Credits:      credits,
-		Generators:   []types.TaskGenerator{gen},
-		Logger:       slog.Default(),
-		TickInterval: 100 * time.Millisecond,
-		MaxRPS:       100.0,
-	})
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -474,4 +416,82 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	assert.Equal(t, credit.RegimeScarce, credits.Regime())
 
 	cancel()
+}
+
+func TestUnifiedScheduler_RetriesOnComputationLimit(t *testing.T) {
+	aliasA := railway.SanitizeAlias("proj-a")
+	aliasB := railway.SanitizeAlias("proj-b")
+
+	cases := []struct {
+		name          string
+		firstResponse *railway.RawQueryResponse
+		firstErr      error
+	}{
+		{
+			name:     "transport error",
+			firstErr: fmt.Errorf("Problem processing request: computation limit exceeded"),
+		},
+		{
+			name: "graphql error body",
+			firstResponse: &railway.RawQueryResponse{
+				Data: map[string]json.RawMessage{},
+				Errors: []railway.GraphQLError{
+					{Message: "Problem processing request: too complex"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			api := mocks.NewMockRailwayAPI(ctrl)
+			fakeClock := clockwork.NewFakeClock()
+
+			gen := &stubGenerator{
+				taskType: types.TaskTypeMetrics,
+				pollItems: []types.WorkItem{
+					newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z"),
+					newMetricsWorkItem("proj-b", "2025-01-02T00:00:00Z", "2025-01-02T01:00:00Z"),
+				},
+			}
+
+			callCount := atomic.Int32{}
+			api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
+					n := callCount.Add(1)
+					if n == 1 {
+						return tc.firstResponse, tc.firstErr
+					}
+					// Subsequent individual retries succeed.
+					return &railway.RawQueryResponse{
+						Data: map[string]json.RawMessage{
+							aliasA: json.RawMessage(`[]`),
+							aliasB: json.RawMessage(`[]`),
+						},
+					}, nil
+				}).MinTimes(2)
+
+			// Return a short reset window so updateRateState keeps the rate limiter fast (near MaxRPS).
+			api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(5*time.Second)).AnyTimes()
+
+			credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+			s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go s.Run(ctx)
+
+			fakeClock.BlockUntil(1)
+			fakeClock.Advance(200 * time.Millisecond)
+
+			deliveries := gen.waitForDeliveries(t, 2, 5*time.Second)
+			assert.Len(t, deliveries, 2)
+			assert.GreaterOrEqual(t, callCount.Load(), int32(2))
+
+			cancel()
+		})
+	}
 }

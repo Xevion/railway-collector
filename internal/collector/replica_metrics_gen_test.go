@@ -83,6 +83,25 @@ func TestReplicaMetricsGenerator_Poll_GapChunking(t *testing.T) {
 	})
 }
 
+func TestReplicaMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
+	testRespectsInterval(t, 30*time.Second, func(env *genTestEnv) types.TaskGenerator {
+		return collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+			BaseMetricsConfig: collector.BaseMetricsConfig{
+				Discovery:       env.Targets,
+				Store:           env.Store,
+				Clock:           env.Clock,
+				Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+				SampleRate:      30,
+				AvgWindow:       30,
+				Interval:        30 * time.Second,
+				MetricRetention: 1 * time.Hour,
+				MaxItemsPerPoll: 10,
+				Logger:          slog.Default(),
+			},
+		})
+	})
+}
+
 func TestReplicaMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	env := setupGenTest(t)
 
@@ -171,6 +190,24 @@ func TestReplicaMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 			})
 		},
 		types.WorkItem{ID: "replica-metrics:svc-1:env-1", AliasKey: "svc-1:env-1"},
+	)
+}
+
+func TestReplicaMetricsGenerator_Deliver_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery: env.Targets, Sinks: []sink.Sink{s},
+					Clock: env.Clock, Interval: 30 * time.Second, Logger: slog.Default(),
+				},
+			})
+		},
+		types.WorkItem{
+			ID: "replica-metrics:svc-1:env-1", Kind: types.QueryReplicaMetrics,
+			TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+		},
 	)
 }
 

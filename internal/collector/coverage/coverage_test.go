@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/xevion/railway-collector/internal/collector/coverage"
 )
@@ -258,6 +259,137 @@ func TestPrioritizeGaps_RecentFirst(t *testing.T) {
 	prioritized := coverage.PrioritizeGaps(gaps, now)
 	// Recent gap (live edge) should rank first with recency-based scoring
 	assert.Equal(t, gaps[0].Start, prioritized[0].Start)
+}
+
+// fakeStore is a minimal in-memory implementation of the GetCoverage/SetCoverage
+// interfaces used by LoadCoverage and SaveCoverage, for use in tests only.
+type fakeStore struct {
+	data map[string][]byte
+}
+
+func (f *fakeStore) GetCoverage(key string) ([]byte, error) {
+	return f.data[key], nil
+}
+
+func (f *fakeStore) SetCoverage(key string, data []byte) error {
+	if f.data == nil {
+		f.data = make(map[string][]byte)
+	}
+	f.data[key] = data
+	return nil
+}
+
+// TestLoadCoverage consolidates the three load scenarios into a single table.
+func TestLoadCoverage(t *testing.T) {
+	tests := []struct {
+		name      string
+		storeData map[string][]byte
+		key       string
+		wantErr   bool
+		wantNil   bool
+		wantEmpty bool
+	}{
+		{
+			name:      "corrupted JSON returns error",
+			storeData: map[string][]byte{"test-key": []byte(`{not valid json`)},
+			key:       "test-key",
+			wantErr:   true,
+			wantNil:   true,
+		},
+		{
+			name:      "missing key returns nil without error",
+			storeData: map[string][]byte{},
+			key:       "missing-key",
+			wantErr:   false,
+			wantNil:   true,
+		},
+		{
+			name:      "empty array returns empty slice without error",
+			storeData: map[string][]byte{"test-key": []byte(`[]`)},
+			key:       "test-key",
+			wantErr:   false,
+			wantEmpty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{data: tt.storeData}
+			intervals, err := coverage.LoadCoverage(store, tt.key)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			if tt.wantNil {
+				assert.Nil(t, intervals)
+			} else if tt.wantEmpty {
+				assert.Empty(t, intervals)
+			}
+		})
+	}
+}
+
+// TestSaveCoverage verifies that SaveCoverage correctly persists intervals and
+// that a subsequent LoadCoverage round-trip restores the original data.
+func TestSaveCoverage(t *testing.T) {
+	t1 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 3, 1, 1, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 3, 1, 2, 0, 0, 0, time.UTC)
+
+	t.Run("round-trip preserves intervals", func(t *testing.T) {
+		store := &fakeStore{data: make(map[string][]byte)}
+		key := "proj-1:metric"
+
+		original := []coverage.CoverageInterval{
+			{Start: t1, End: t2, Kind: coverage.CoverageCollected, Resolution: 30},
+			{Start: t2, End: t3, Kind: coverage.CoverageEmpty},
+		}
+
+		err := coverage.SaveCoverage(store, key, original)
+		require.NoError(t, err)
+
+		loaded, err := coverage.LoadCoverage(store, key)
+		require.NoError(t, err)
+		require.Len(t, loaded, 2)
+
+		assert.Equal(t, original[0].Start, loaded[0].Start)
+		assert.Equal(t, original[0].End, loaded[0].End)
+		assert.Equal(t, original[0].Kind, loaded[0].Kind)
+		assert.Equal(t, original[0].Resolution, loaded[0].Resolution)
+
+		assert.Equal(t, original[1].Start, loaded[1].Start)
+		assert.Equal(t, original[1].End, loaded[1].End)
+		assert.Equal(t, original[1].Kind, loaded[1].Kind)
+	})
+
+	t.Run("overwrite replaces previous intervals", func(t *testing.T) {
+		store := &fakeStore{data: make(map[string][]byte)}
+		key := "proj-1:metric"
+
+		first := []coverage.CoverageInterval{
+			{Start: t1, End: t2, Kind: coverage.CoverageCollected, Resolution: 30},
+		}
+		second := []coverage.CoverageInterval{
+			{Start: t1, End: t2, Kind: coverage.CoverageCollected, Resolution: 60},
+			{Start: t2, End: t3, Kind: coverage.CoverageCollected, Resolution: 60},
+		}
+
+		err := coverage.SaveCoverage(store, key, first)
+		require.NoError(t, err)
+
+		err = coverage.SaveCoverage(store, key, second)
+		require.NoError(t, err)
+
+		loaded, err := coverage.LoadCoverage(store, key)
+		require.NoError(t, err)
+		require.Len(t, loaded, 2, "overwrite should replace all previous intervals")
+
+		assert.Equal(t, 60, loaded[0].Resolution)
+		assert.Equal(t, 60, loaded[1].Resolution)
+	})
 }
 
 func TestInsertInterval_MergesWithExisting(t *testing.T) {

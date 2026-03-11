@@ -124,6 +124,28 @@ func testRespectsInterval(t *testing.T, interval time.Duration, makeGen func(env
 	require.NotEmpty(t, items, "poll after interval should return items")
 }
 
+// testDeliverInvalidJSON verifies that delivering malformed JSON does not panic
+// or write to sinks. item must carry a valid QueryKind for the generator.
+func testDeliverInvalidJSON(t *testing.T, targets []types.ServiceTarget, makeGen func(env *genTestEnv, s sink.Sink) types.TaskGenerator, item types.WorkItem) {
+	t.Helper()
+	env := setupGenTest(t)
+	env.Targets.EXPECT().Targets().Return(targets).AnyTimes()
+	sinkCalled := false
+	fakeSink := &recordingSink{
+		writeMetrics: func(_ context.Context, _ []sink.MetricPoint) error {
+			sinkCalled = true
+			return nil
+		},
+		writeLogs: func(_ context.Context, _ []sink.LogEntry) error {
+			sinkCalled = true
+			return nil
+		},
+	}
+	gen := makeGen(env, fakeSink)
+	gen.Deliver(context.Background(), item, []byte("{not valid json"), nil)
+	assert.False(t, sinkCalled, "sink should not be called on invalid JSON")
+}
+
 // gapChunkCase defines a test case for gap-chunking behavior shared across generators.
 type gapChunkCase struct {
 	name            string

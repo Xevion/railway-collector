@@ -257,6 +257,24 @@ func TestProjectMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	)
 }
 
+func TestProjectMetricsGenerator_Deliver_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ProjectName: "test"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery: env.Targets, Sinks: []sink.Sink{s},
+					Clock: env.Clock, Interval: 30 * time.Second, Logger: slog.Default(),
+				},
+			})
+		},
+		types.WorkItem{
+			ID: "metrics:proj-1", Kind: types.QueryMetrics,
+			TaskType: types.TaskTypeMetrics, AliasKey: "proj-1",
+		},
+	)
+}
+
 func TestProjectMetricsGenerator_Poll_GapChunking(t *testing.T) {
 	// Project metrics has one extra case not shared with other generators.
 	cases := append(commonGapChunkCases(), gapChunkCase{

@@ -3,6 +3,7 @@ package collector_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -377,6 +378,23 @@ func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
 	assert.Equal(t, "info", collected[0].Severity)
 }
 
+func TestLogsGenerator_Deliver_EnvironmentLogs_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Types: []string{"deployment"},
+				Limit: 500, Interval: 30 * time.Second, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{
+			ID: "envlogs:env-1", Kind: types.QueryEnvironmentLogs,
+			TaskType: types.TaskTypeLogs, AliasKey: "env-1",
+		},
+	)
+}
+
 func TestLogsGenerator_Deliver_HandlesError(t *testing.T) {
 	testDeliverHandlesError(t,
 		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"}},
@@ -389,4 +407,299 @@ func TestLogsGenerator_Deliver_HandlesError(t *testing.T) {
 		},
 		types.WorkItem{ID: "envlogs:env-1", Kind: types.QueryEnvironmentLogs, AliasKey: "env-1"},
 	)
+}
+
+func TestLogsGenerator_Deliver_EnvironmentLogs_UnknownServiceID(t *testing.T) {
+	env := setupGenTest(t)
+
+	ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	afterDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+		ProjectID:       "proj-1",
+		ProjectName:     "test-project",
+		ServiceID:       "svc-1",
+		ServiceName:     "test-service",
+		EnvironmentID:   "env-1",
+		EnvironmentName: "production",
+		DeploymentID:    "dep-1",
+	}})
+
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+	var collected []sink.LogEntry
+	fakeSink := &recordingSink{
+		writeLogs: func(_ context.Context, logs []sink.LogEntry) error {
+			collected = logs
+			return nil
+		},
+	}
+
+	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+		Discovery: env.Targets,
+		Store:     env.Store,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     env.Clock,
+		Types:     []string{"deployment"},
+		Limit:     500,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	rawData := []map[string]any{
+		{
+			"timestamp": ts,
+			"message":   "unknown service log",
+			"tags": map[string]any{
+				"serviceId": "svc-unknown",
+			},
+			"attributes": []map[string]string{},
+		},
+	}
+	data, err := json.Marshal(rawData)
+	require.NoError(t, err)
+
+	item := types.WorkItem{
+		ID:       "envlogs:env-1",
+		Kind:     types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs,
+		AliasKey: "env-1",
+		Params: map[string]any{
+			"afterDate": afterDate,
+		},
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
+
+	require.Len(t, collected, 1)
+	assert.Equal(t, "svc-unknown", collected[0].Labels["service_id"])
+	assert.NotContains(t, collected[0].Labels, "service_name")
+}
+
+func TestLogsGenerator_Deliver_EnvironmentLogs_ProjectIDFallback(t *testing.T) {
+	env := setupGenTest(t)
+
+	ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	afterDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+		ProjectID:       "proj-1",
+		ProjectName:     "test-project",
+		ServiceID:       "svc-1",
+		ServiceName:     "test-service",
+		EnvironmentID:   "env-1",
+		EnvironmentName: "production",
+		DeploymentID:    "dep-1",
+	}})
+
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+	var collected []sink.LogEntry
+	fakeSink := &recordingSink{
+		writeLogs: func(_ context.Context, logs []sink.LogEntry) error {
+			collected = logs
+			return nil
+		},
+	}
+
+	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+		Discovery: env.Targets,
+		Store:     env.Store,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     env.Clock,
+		Types:     []string{"deployment"},
+		Limit:     500,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	rawData := []map[string]any{
+		{
+			"timestamp": ts,
+			"message":   "project only log",
+			"tags": map[string]any{
+				"projectId": "proj-1",
+			},
+			"attributes": []map[string]string{},
+		},
+	}
+	data, err := json.Marshal(rawData)
+	require.NoError(t, err)
+
+	item := types.WorkItem{
+		ID:       "envlogs:env-1",
+		Kind:     types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs,
+		AliasKey: "env-1",
+		Params: map[string]any{
+			"afterDate": afterDate,
+		},
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
+
+	require.Len(t, collected, 1)
+	assert.Equal(t, "proj-1", collected[0].Labels["project_id"])
+	assert.NotContains(t, collected[0].Labels, "service_name")
+}
+
+func TestLogsGenerator_Deliver_EnvironmentLogs_UnparseableTimestamp(t *testing.T) {
+	env := setupGenTest(t)
+
+	goodTS := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	afterDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+		ProjectID:     "proj-1",
+		ServiceID:     "svc-1",
+		EnvironmentID: "env-1",
+		DeploymentID:  "dep-1",
+	}})
+
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+	var collected []sink.LogEntry
+	fakeSink := &recordingSink{
+		writeLogs: func(_ context.Context, logs []sink.LogEntry) error {
+			collected = logs
+			return nil
+		},
+	}
+
+	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+		Discovery: env.Targets,
+		Store:     env.Store,
+		Sinks:     []sink.Sink{fakeSink},
+		Clock:     env.Clock,
+		Types:     []string{"deployment"},
+		Limit:     500,
+		Interval:  30 * time.Second,
+		Logger:    slog.Default(),
+	})
+
+	rawData := []map[string]any{
+		{
+			"timestamp":  "not-a-timestamp",
+			"message":    "bad ts",
+			"attributes": []map[string]string{},
+		},
+		{
+			"timestamp":  goodTS,
+			"message":    "good ts",
+			"attributes": []map[string]string{},
+		},
+	}
+	data, err := json.Marshal(rawData)
+	require.NoError(t, err)
+
+	item := types.WorkItem{
+		ID:       "envlogs:env-1",
+		Kind:     types.QueryEnvironmentLogs,
+		TaskType: types.TaskTypeLogs,
+		AliasKey: "env-1",
+		Params: map[string]any{
+			"afterDate": afterDate,
+		},
+	}
+
+	gen.Deliver(context.Background(), item, data, nil)
+
+	require.Len(t, collected, 1)
+	assert.Equal(t, "good ts", collected[0].Message)
+}
+
+func TestLogsGenerator_Deliver_HttpLogs_SeverityMapping(t *testing.T) {
+	tests := []struct {
+		httpStatus int
+		wantSev    string
+	}{
+		{200, "info"},
+		{301, "info"},
+		{399, "info"},
+		{400, "warn"},
+		{404, "warn"},
+		{499, "warn"},
+		{500, "error"},
+		{503, "error"},
+		{599, "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d", tt.httpStatus), func(t *testing.T) {
+			env := setupGenTest(t)
+
+			ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+			startDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+
+			env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+				ProjectID:       "proj-1",
+				ProjectName:     "test-project",
+				ServiceID:       "svc-1",
+				ServiceName:     "test-service",
+				EnvironmentID:   "env-1",
+				EnvironmentName: "production",
+				DeploymentID:    "dep-1",
+			}})
+
+			env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+			env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+
+			var collected []sink.LogEntry
+			fakeSink := &recordingSink{
+				writeLogs: func(_ context.Context, logs []sink.LogEntry) error {
+					collected = logs
+					return nil
+				},
+			}
+
+			gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+				Discovery: env.Targets,
+				Store:     env.Store,
+				Sinks:     []sink.Sink{fakeSink},
+				Clock:     env.Clock,
+				Types:     []string{"http"},
+				Limit:     500,
+				Interval:  30 * time.Second,
+				Logger:    slog.Default(),
+			})
+
+			rawData := []map[string]any{
+				{
+					"timestamp":          ts,
+					"method":             "GET",
+					"path":               "/api",
+					"host":               "example.com",
+					"httpStatus":         tt.httpStatus,
+					"totalDuration":      50,
+					"upstreamRqDuration": 40,
+					"srcIp":              "1.2.3.4",
+					"clientUa":           "test-agent",
+					"rxBytes":            100,
+					"txBytes":            200,
+					"edgeRegion":         "us-east-1",
+				},
+			}
+			data, err := json.Marshal(rawData)
+			require.NoError(t, err)
+
+			item := types.WorkItem{
+				ID:       "httplogs:dep-1",
+				Kind:     types.QueryHttpLogs,
+				TaskType: types.TaskTypeLogs,
+				AliasKey: "dep-1",
+				Params: map[string]any{
+					"startDate": startDate,
+				},
+			}
+
+			gen.Deliver(context.Background(), item, data, nil)
+
+			require.Len(t, collected, 1)
+			assert.Equal(t, tt.wantSev, collected[0].Severity)
+			assert.Equal(t, fmt.Sprintf("%d", tt.httpStatus), collected[0].Labels["status"])
+		})
+	}
 }

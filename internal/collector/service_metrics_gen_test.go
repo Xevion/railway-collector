@@ -184,6 +184,24 @@ func TestServiceMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	)
 }
 
+func TestServiceMetricsGenerator_Deliver_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery: env.Targets, Sinks: []sink.Sink{s},
+					Clock: env.Clock, Interval: 30 * time.Second, Logger: slog.Default(),
+				},
+			})
+		},
+		types.WorkItem{
+			ID: "svc-metrics:svc-1:env-1", Kind: types.QueryServiceMetrics,
+			TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+		},
+	)
+}
+
 func TestServiceMetricsGenerator_Poll_GapChunking(t *testing.T) {
 	// Service metrics has one extra case not shared with other generators.
 	cases := append(commonGapChunkCases(), gapChunkCase{

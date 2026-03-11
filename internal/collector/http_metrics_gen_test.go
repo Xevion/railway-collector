@@ -184,6 +184,21 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 	}
 }
 
+func TestHttpMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
+	testRespectsInterval(t, 30*time.Second, func(env *genTestEnv) types.TaskGenerator {
+		return collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+			Discovery:       env.Targets,
+			Store:           env.Store,
+			Clock:           env.Clock,
+			Interval:        30 * time.Second,
+			MetricRetention: 1 * time.Hour,
+			MaxItemsPerPoll: 10,
+			StepSeconds:     60,
+			Logger:          slog.Default(),
+		})
+	})
+}
+
 func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 	env := setupGenTest(t)
 
@@ -360,6 +375,38 @@ func TestHttpMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 			})
 		},
 		types.WorkItem{ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics, AliasKey: "svc-1:env-1"},
+	)
+}
+
+func TestHttpMetricsGenerator_Deliver_Duration_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Interval: 30 * time.Second, StepSeconds: 60, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{
+			ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics,
+			TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+		},
+	)
+}
+
+func TestHttpMetricsGenerator_Deliver_Status_InvalidJSON(t *testing.T) {
+	testDeliverInvalidJSON(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Interval: 30 * time.Second, StepSeconds: 60, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{
+			ID: "http-status:svc-1:env-1", Kind: types.QueryHttpMetricsGroupedByStatus,
+			TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+		},
 	)
 }
 
