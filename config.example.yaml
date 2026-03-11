@@ -69,11 +69,6 @@ filters:
 
 # Sinks define where collected data is sent.
 sinks:
-  prometheus:
-    enabled: true
-    # Address for the /metrics and /health endpoints.
-    listen: ":9106"
-
   file:
     enabled: false
     # Path for JSON lines output (metrics + logs).

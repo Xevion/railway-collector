@@ -204,6 +204,17 @@ func (g *BackfillGenerator) pollMetricGaps(now time.Time, targets []ServiceTarge
 			continue
 		}
 
+		var totalGapDuration time.Duration
+		for _, gap := range gaps {
+			totalGapDuration += gap.End.Sub(gap.Start)
+		}
+		g.logger.Debug("metric coverage gaps found",
+			"project_id", projectID,
+			"gaps", len(gaps),
+			"total_gap_duration", totalGapDuration,
+			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+		)
+
 		prioritized := PrioritizeGaps(gaps, now)
 
 		for _, gap := range prioritized {
@@ -268,6 +279,17 @@ func (g *BackfillGenerator) pollEnvLogGaps(now time.Time, targets []ServiceTarge
 		if len(gaps) == 0 {
 			continue
 		}
+
+		var totalGapDuration time.Duration
+		for _, gap := range gaps {
+			totalGapDuration += gap.End.Sub(gap.Start)
+		}
+		g.logger.Debug("env log coverage gaps found",
+			"environment_id", t.EnvironmentID,
+			"gaps", len(gaps),
+			"total_gap_duration", totalGapDuration,
+			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+		)
 
 		prioritized := PrioritizeGaps(gaps, now)
 
@@ -377,7 +399,7 @@ func (g *BackfillGenerator) deliverMetrics(ctx context.Context, item WorkItem, d
 	// Transform to MetricPoints
 	var points []sink.MetricPoint
 	for _, result := range results {
-		metricName := rawMeasurementToPrometheusName(result.Measurement)
+		metricName := measurementToMetricName(result.Measurement)
 		labels := g.buildBackfillLabelsFromRaw(result.Tags, targets)
 
 		for _, v := range result.Values {
@@ -390,9 +412,13 @@ func (g *BackfillGenerator) deliverMetrics(ctx context.Context, item WorkItem, d
 		}
 	}
 
+	startDateStr, _ := item.Params["startDate"].(string)
+	endDateStr, _ := item.Params["endDate"].(string)
+
 	g.logger.Debug("backfill metrics delivered",
 		"project", projectName, "project_id", projectID,
-		"series", len(results), "points", len(points))
+		"series", len(results), "points", len(points),
+		"start", startDateStr, "end", endDateStr)
 
 	// Write to sinks
 	if len(points) > 0 {
@@ -405,8 +431,6 @@ func (g *BackfillGenerator) deliverMetrics(ctx context.Context, item WorkItem, d
 	}
 
 	// Update coverage
-	startDateStr, _ := item.Params["startDate"].(string)
-	endDateStr, _ := item.Params["endDate"].(string)
 	startTime, _ := time.Parse(time.RFC3339, startDateStr)
 	endTime, _ := time.Parse(time.RFC3339, endDateStr)
 
@@ -491,8 +515,12 @@ func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, d
 		})
 	}
 
+	afterDateStr, _ := item.Params["afterDate"].(string)
+	beforeDateStr, _ := item.Params["beforeDate"].(string)
+
 	g.logger.Debug("backfill env logs delivered",
-		"environment", envName, "environment_id", envID, "entries", len(entries))
+		"environment", envName, "environment_id", envID, "entries", len(entries),
+		"start", afterDateStr, "end", beforeDateStr)
 
 	if len(entries) > 0 {
 		for _, s := range g.sinks {
@@ -504,8 +532,6 @@ func (g *BackfillGenerator) deliverEnvLogs(ctx context.Context, item WorkItem, d
 	}
 
 	// Update coverage
-	afterDateStr, _ := item.Params["afterDate"].(string)
-	beforeDateStr, _ := item.Params["beforeDate"].(string)
 	covStart, _ := time.Parse(time.RFC3339Nano, afterDateStr)
 	covEnd, _ := time.Parse(time.RFC3339Nano, beforeDateStr)
 

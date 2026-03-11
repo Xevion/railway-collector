@@ -16,7 +16,7 @@ var measurementMap = map[string]railway.MetricMeasurement{
 	"backup":         railway.MetricMeasurementBackupUsageGb,
 }
 
-var prometheusNameMap = map[railway.MetricMeasurement]string{
+var metricNameMap = map[railway.MetricMeasurement]string{
 	railway.MetricMeasurementCpuUsage:             "railway_cpu_usage_cores",
 	railway.MetricMeasurementCpuLimit:             "railway_cpu_limit_cores",
 	railway.MetricMeasurementMemoryUsageGb:        "railway_memory_usage_gb",

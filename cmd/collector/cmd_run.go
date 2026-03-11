@@ -101,9 +101,6 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	// Initialize sinks
 	var sinks []sink.Sink
 
-	if cfg.Sinks.Prometheus.Enabled {
-		sinks = append(sinks, sink.NewPrometheusSink(cfg.Sinks.Prometheus.Listen, logger))
-	}
 	if cfg.Sinks.File.Enabled {
 		fs, err := sink.NewFileSink(cfg.Sinks.File.Path, logger)
 		if err != nil {
@@ -170,7 +167,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		BackfillRate:  cfg.Collect.Credits.BackfillRate,
 		MaxCredits:    cfg.Collect.Credits.MaxCredits,
 	}
-	credits := collector.NewCreditAllocator(creditCfg, now)
+	credits := collector.NewCreditAllocator(creditCfg, now, logger)
 
 	// Build generators
 	var generators []collector.TaskGenerator

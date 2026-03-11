@@ -262,7 +262,7 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 	// Transform to MetricPoints
 	var points []sink.MetricPoint
 	for _, result := range results {
-		metricName := rawMeasurementToPrometheusName(result.Measurement)
+		metricName := measurementToMetricName(result.Measurement)
 		labels := g.buildLabelsFromRaw(result.Tags, targets)
 
 		for _, v := range result.Values {
@@ -278,6 +278,8 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 	g.logger.Debug("metrics delivered",
 		"project", projectName, "project_id", projectID,
 		"series", len(results), "points", len(points),
+		"start", startTime.Format(time.RFC3339),
+		"end", now.Format(time.RFC3339),
 	)
 
 	// Write to sinks
@@ -295,12 +297,11 @@ func (g *MetricsGenerator) buildLabelsFromRaw(tags rawMetricsTags, targets []Ser
 	return buildMetricLabels(tags, targets)
 }
 
-// rawMeasurementToPrometheusName converts a raw measurement string
-// (e.g. "CPU_USAGE") to the Prometheus metric name.
-func rawMeasurementToPrometheusName(measurement string) string {
-	// Try the enum-based map first (handles the standard genqlient enum values)
+// measurementToMetricName converts a raw measurement string
+// (e.g. "CPU_USAGE") to the canonical metric name.
+func measurementToMetricName(measurement string) string {
 	m := railway.MetricMeasurement(measurement)
-	if name, ok := prometheusNameMap[m]; ok {
+	if name, ok := metricNameMap[m]; ok {
 		return name
 	}
 	return fmt.Sprintf("railway_%s", strings.ToLower(measurement))

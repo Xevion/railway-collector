@@ -110,9 +110,8 @@ type FiltersConfig struct {
 }
 
 type SinksConfig struct {
-	Prometheus PrometheusSinkConfig `koanf:"prometheus"`
-	File       FileSinkConfig       `koanf:"file"`
-	OTLP       OTLPSinkConfig       `koanf:"otlp"`
+	File FileSinkConfig `koanf:"file"`
+	OTLP OTLPSinkConfig `koanf:"otlp"`
 }
 
 type OTLPSinkConfig struct {
@@ -123,11 +122,6 @@ type OTLPSinkConfig struct {
 	LogsEndpoint string `koanf:"logs_endpoint"`
 	// Extra headers for requests (e.g. VL-Stream-Fields for VictoriaLogs)
 	Headers map[string]string `koanf:"headers"`
-}
-
-type PrometheusSinkConfig struct {
-	Enabled bool   `koanf:"enabled"`
-	Listen  string `koanf:"listen"`
 }
 
 type FileSinkConfig struct {
@@ -183,10 +177,6 @@ func DefaultConfig() *Config {
 			},
 		},
 		Sinks: SinksConfig{
-			Prometheus: PrometheusSinkConfig{
-				Enabled: true,
-				Listen:  ":9106",
-			},
 			File: FileSinkConfig{
 				Enabled: false,
 				Path:    "./railway-collector.jsonl",

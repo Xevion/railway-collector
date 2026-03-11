@@ -1,6 +1,8 @@
 package collector
 
 import (
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -108,10 +110,11 @@ type CreditAllocator struct {
 	pools  map[TaskType]*creditPool
 	config CreditConfig
 	regime Regime
+	logger *slog.Logger
 }
 
 // NewCreditAllocator creates a new allocator with default credit pools.
-func NewCreditAllocator(cfg CreditConfig, now time.Time) *CreditAllocator {
+func NewCreditAllocator(cfg CreditConfig, now time.Time, logger *slog.Logger) *CreditAllocator {
 	return &CreditAllocator{
 		pools: map[TaskType]*creditPool{
 			TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),
@@ -121,6 +124,7 @@ func NewCreditAllocator(cfg CreditConfig, now time.Time) *CreditAllocator {
 		},
 		config: cfg,
 		regime: RegimeAbundant,
+		logger: logger,
 	}
 }
 
@@ -183,7 +187,16 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 	if newRegime == ca.regime {
 		return
 	}
+	oldRegime := ca.regime
 	ca.regime = newRegime
+
+	ca.logger.Info("credit regime changed",
+		"from", oldRegime.String(),
+		"to", newRegime.String(),
+		"remaining", remaining,
+		"limit", limit,
+		slog.String("budget_pct", fmt.Sprintf("%.1f%%", ratio*100)),
+	)
 
 	switch newRegime {
 	case RegimeExhausted:

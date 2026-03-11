@@ -1,6 +1,8 @@
 package collector_test
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -8,10 +10,12 @@ import (
 	"github.com/xevion/railway-collector/internal/collector"
 )
 
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
 func TestCreditPool_DripRate(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
+	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
 	// Initially has 1.0 credit (startup)
 	assert.InDelta(t, 1.0, ca.Available(collector.TaskTypeMetrics, now), 0.01)
@@ -25,7 +29,7 @@ func TestCreditPool_DripRate(t *testing.T) {
 func TestCreditPool_MaxCap(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
+	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
 	// After 10 minutes, backfill at 11/min should be capped at MaxCredits (4.0)
 	later := now.Add(10 * time.Minute)
@@ -36,7 +40,7 @@ func TestCreditPool_MaxCap(t *testing.T) {
 func TestCreditAllocator_TryDeduct(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
+	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
 	// Should have 1 initial credit
 	assert.True(t, ca.TryDeduct(collector.TaskTypeMetrics, now))
@@ -51,7 +55,7 @@ func TestCreditAllocator_TryDeduct(t *testing.T) {
 func TestCreditAllocator_RegimeTransitions(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
+	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
 	assert.Equal(t, collector.RegimeAbundant, ca.Regime())
 
@@ -75,7 +79,7 @@ func TestCreditAllocator_RegimeTransitions(t *testing.T) {
 func TestCreditAllocator_ScarceDisablesBackfill(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	ca := collector.NewCreditAllocator(cfg, now)
+	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
 	// Use initial backfill credit
 	ca.TryDeduct(collector.TaskTypeBackfill, now)

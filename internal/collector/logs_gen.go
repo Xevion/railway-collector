@@ -342,7 +342,8 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	}
 
 	g.logger.Debug("environment logs delivered",
-		"environment", envName, "environment_id", envID, "entries", len(entries))
+		"environment", envName, "environment_id", envID, "entries", len(entries),
+		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
 
 	for _, s := range g.sinks {
 		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
@@ -406,7 +407,8 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 		g.recordDeploymentLogCoverage(deploymentID, "build", item, maxTS)
 	}
 
-	g.logger.Debug("build logs delivered", "deployment_id", deploymentID, "entries", len(entries))
+	g.logger.Debug("build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
+		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
 
 	for _, s := range g.sinks {
 		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
@@ -482,7 +484,8 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 		g.recordDeploymentLogCoverage(deploymentID, "http", item, maxTS)
 	}
 
-	g.logger.Debug("HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries))
+	g.logger.Debug("HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
+		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
 
 	for _, s := range g.sinks {
 		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {

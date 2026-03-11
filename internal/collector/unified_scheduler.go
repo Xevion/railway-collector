@@ -134,16 +134,26 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 
 	// 3. Select highest-priority batch with available credits.
 	var selected *Batch
+	var skippedTypes []string
 	for i := range batches {
 		if s.cfg.Credits.TryDeduct(batches[i].TaskType, now) {
 			selected = &batches[i]
 			break
 		}
+		skippedTypes = append(skippedTypes, batches[i].TaskType.String())
 	}
 	if selected == nil {
 		s.logIdleStatus(now)
 		return
 	}
+
+	s.cfg.Logger.Debug("scheduler tick: batch selected",
+		"kind", selected.Kind,
+		"task_type", selected.TaskType.String(),
+		"aliases", len(selected.Items),
+		"candidates", len(batches),
+		"skipped_no_credits", skippedTypes,
+	)
 
 	// 4. Wait for rate limiter.
 	if err := s.limiter.Wait(ctx); err != nil {
@@ -265,9 +275,18 @@ func (s *UnifiedScheduler) updateRateState() {
 		if targetRate < 0.01 {
 			targetRate = 0.01 // minimum rate to avoid complete stall
 		}
+		oldLimit := float64(s.limiter.Limit())
 		s.limiter.SetLimit(rate.Limit(targetRate))
+		if int(targetRate*1000) != int(oldLimit*1000) {
+			s.cfg.Logger.Debug("rate limiter adjusted",
+				"new_rps", targetRate,
+				"remaining", remaining,
+				"reset_in", time.Duration(secondsLeft*float64(time.Second)).Truncate(time.Second),
+			)
+		}
 	} else if remaining <= 0 {
 		// Near-zero rate when exhausted (limiter doesn't support 0).
 		s.limiter.SetLimit(rate.Limit(0.001))
+		s.cfg.Logger.Debug("rate limiter set to minimum (exhausted)", "remaining", remaining)
 	}
 }
