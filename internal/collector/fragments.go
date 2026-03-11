@@ -14,6 +14,50 @@ func sanitizeCompositeAlias(key string) string {
 	return strings.ReplaceAll(railway.SanitizeAlias(key), ":", "_")
 }
 
+// fragmentBuilder accumulates namespaced GraphQL variable declarations, values,
+// and argument parts for a single aliased fragment. It eliminates the repetitive
+// 4-line "create var name, append decl, set value, append arg" pattern.
+type fragmentBuilder struct {
+	alias    string
+	params   map[string]any
+	vars     map[string]any
+	decls    []string
+	argParts []string
+}
+
+func newFragmentBuilder(alias string, params map[string]any) *fragmentBuilder {
+	return &fragmentBuilder{
+		alias:  alias,
+		params: params,
+		vars:   make(map[string]any),
+	}
+}
+
+// addLiteral adds an inline literal argument (not a variable), e.g. projectId: "abc".
+func (b *fragmentBuilder) addLiteral(name, value string) {
+	b.argParts = append(b.argParts, fmt.Sprintf("%s: %q", name, value))
+}
+
+// addVar adds a required namespaced variable with an explicit value.
+func (b *fragmentBuilder) addVar(name, gqlType string, value any) {
+	v := name + "_" + b.alias
+	b.decls = append(b.decls, fmt.Sprintf("$%s: %s", v, gqlType))
+	b.vars[v] = value
+	b.argParts = append(b.argParts, fmt.Sprintf("%s: $%s", name, v))
+}
+
+// addOptionalVar adds a namespaced variable only if the param exists in b.params.
+func (b *fragmentBuilder) addOptionalVar(name, gqlType string) {
+	if val, ok := b.params[name]; ok {
+		b.addVar(name, gqlType, val)
+	}
+}
+
+// args joins all accumulated argument parts with ", ".
+func (b *fragmentBuilder) args() string {
+	return strings.Join(b.argParts, ", ")
+}
+
 // estimateMetricPoints estimates the number of data points a metrics query will
 // return based on time range, sample rate, and measurement count.
 // For open-ended queries (no endDate), uses nowFunc to determine the end time.
@@ -113,64 +157,22 @@ func FragmentFromWorkItem(item WorkItem, now time.Time) AliasFragment {
 
 func metricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// projectId is a literal, not a variable
-	argParts = append(argParts, fmt.Sprintf("projectId: %q", item.AliasKey))
-
-	// startDate (required)
-	startVar := "startDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", startVar))
-	vars[startVar] = item.Params["startDate"]
-	argParts = append(argParts, fmt.Sprintf("startDate: $%s", startVar))
-
-	// endDate (optional)
-	if ed, ok := item.Params["endDate"]; ok {
-		endVar := "endDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", endVar))
-		vars[endVar] = ed
-		argParts = append(argParts, fmt.Sprintf("endDate: $%s", endVar))
-	}
-
-	// measurements
-	measVar := "measurements_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: [MetricMeasurement!]!", measVar))
-	vars[measVar] = item.Params["measurements"]
-	argParts = append(argParts, fmt.Sprintf("measurements: $%s", measVar))
-
-	// groupBy (optional)
-	if gb, ok := item.Params["groupBy"]; ok {
-		gbVar := "groupBy_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: [MetricTag!]", gbVar))
-		vars[gbVar] = gb
-		argParts = append(argParts, fmt.Sprintf("groupBy: $%s", gbVar))
-	}
-
-	// sampleRateSeconds
-	if sr, ok := item.Params["sampleRateSeconds"]; ok {
-		srVar := "sampleRateSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", srVar))
-		vars[srVar] = sr
-		argParts = append(argParts, fmt.Sprintf("sampleRateSeconds: $%s", srVar))
-	}
-
-	// averagingWindowSeconds
-	if aw, ok := item.Params["averagingWindowSeconds"]; ok {
-		awVar := "averagingWindowSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", awVar))
-		vars[awVar] = aw
-		argParts = append(argParts, fmt.Sprintf("averagingWindowSeconds: $%s", awVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("projectId", item.AliasKey)
+	b.addVar("startDate", "DateTime!", item.Params["startDate"])
+	b.addOptionalVar("endDate", "DateTime")
+	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
+	b.addOptionalVar("groupBy", "[MetricTag!]")
+	b.addOptionalVar("sampleRateSeconds", "Int")
+	b.addOptionalVar("averagingWindowSeconds", "Int")
 
 	return AliasFragment{
 		Alias:           alias,
 		Field:           "metrics",
-		Args:            strings.Join(argParts, ", "),
+		Args:            b.args(),
 		Selection:       railway.MetricsFieldBody,
-		VarDecls:        decls,
-		VarValues:       vars,
+		VarDecls:        b.decls,
+		VarValues:       b.vars,
 		Breadth:         BreadthMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
@@ -179,38 +181,19 @@ func metricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
 
 func envLogsFragment(item WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey)
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	argParts = append(argParts, fmt.Sprintf("environmentId: %q", item.AliasKey))
-
-	if ad, ok := item.Params["afterDate"]; ok {
-		v := "afterDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: String", v))
-		vars[v] = ad
-		argParts = append(argParts, fmt.Sprintf("afterDate: $%s", v))
-	}
-	if bd, ok := item.Params["beforeDate"]; ok {
-		v := "beforeDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: String", v))
-		vars[v] = bd
-		argParts = append(argParts, fmt.Sprintf("beforeDate: $%s", v))
-	}
-	if al, ok := item.Params["afterLimit"]; ok {
-		v := "afterLimit_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", v))
-		vars[v] = al
-		argParts = append(argParts, fmt.Sprintf("afterLimit: $%s", v))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("environmentId", item.AliasKey)
+	b.addOptionalVar("afterDate", "String")
+	b.addOptionalVar("beforeDate", "String")
+	b.addOptionalVar("afterLimit", "Int")
 
 	return AliasFragment{
 		Alias:     alias,
 		Field:     "environmentLogs",
-		Args:      strings.Join(argParts, ", "),
+		Args:      b.args(),
 		Selection: railway.EnvironmentLogsFieldBody,
-		VarDecls:  decls,
-		VarValues: vars,
+		VarDecls:  b.decls,
+		VarValues: b.vars,
 		Breadth:   BreadthEnvironmentLogs,
 		Item:      item,
 	}
@@ -218,32 +201,18 @@ func envLogsFragment(item WorkItem) AliasFragment {
 
 func buildLogsFragment(item WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_build"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	argParts = append(argParts, fmt.Sprintf("deploymentId: %q", item.AliasKey))
-
-	if l, ok := item.Params["limit"]; ok {
-		v := "limit_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", v))
-		vars[v] = l
-		argParts = append(argParts, fmt.Sprintf("limit: $%s", v))
-	}
-	if sd, ok := item.Params["startDate"]; ok {
-		v := "startDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", v))
-		vars[v] = sd
-		argParts = append(argParts, fmt.Sprintf("startDate: $%s", v))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("deploymentId", item.AliasKey)
+	b.addOptionalVar("limit", "Int")
+	b.addOptionalVar("startDate", "DateTime")
 
 	return AliasFragment{
 		Alias:     alias,
 		Field:     "buildLogs",
-		Args:      strings.Join(argParts, ", "),
+		Args:      b.args(),
 		Selection: railway.BuildLogsFieldBody,
-		VarDecls:  decls,
-		VarValues: vars,
+		VarDecls:  b.decls,
+		VarValues: b.vars,
 		Breadth:   BreadthBuildLogs,
 		Item:      item,
 	}
@@ -251,33 +220,19 @@ func buildLogsFragment(item WorkItem) AliasFragment {
 
 func httpLogsFragment(item WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_http"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	argParts = append(argParts, fmt.Sprintf("deploymentId: %q", item.AliasKey))
-
-	if l, ok := item.Params["limit"]; ok {
-		v := "limit_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", v))
-		vars[v] = l
-		argParts = append(argParts, fmt.Sprintf("limit: $%s", v))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("deploymentId", item.AliasKey)
+	b.addOptionalVar("limit", "Int")
 	// httpLogs uses String type for dates, not DateTime
-	if sd, ok := item.Params["startDate"]; ok {
-		v := "startDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: String", v))
-		vars[v] = sd
-		argParts = append(argParts, fmt.Sprintf("startDate: $%s", v))
-	}
+	b.addOptionalVar("startDate", "String")
 
 	return AliasFragment{
 		Alias:     alias,
 		Field:     "httpLogs",
-		Args:      strings.Join(argParts, ", "),
+		Args:      b.args(),
 		Selection: railway.HttpLogsFieldBody,
-		VarDecls:  decls,
-		VarValues: vars,
+		VarDecls:  b.decls,
+		VarValues: b.vars,
 		Breadth:   BreadthHttpLogs,
 		Item:      item,
 	}
@@ -285,65 +240,23 @@ func httpLogsFragment(item WorkItem) AliasFragment {
 
 func serviceMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_svcmetrics"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// serviceId and environmentId are literals extracted from Params
-	argParts = append(argParts, fmt.Sprintf("serviceId: %q", item.Params["serviceId"]))
-	argParts = append(argParts, fmt.Sprintf("environmentId: %q", item.Params["environmentId"]))
-
-	// startDate (required)
-	startVar := "startDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", startVar))
-	vars[startVar] = item.Params["startDate"]
-	argParts = append(argParts, fmt.Sprintf("startDate: $%s", startVar))
-
-	// endDate (optional)
-	if ed, ok := item.Params["endDate"]; ok {
-		endVar := "endDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", endVar))
-		vars[endVar] = ed
-		argParts = append(argParts, fmt.Sprintf("endDate: $%s", endVar))
-	}
-
-	// measurements
-	measVar := "measurements_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: [MetricMeasurement!]!", measVar))
-	vars[measVar] = item.Params["measurements"]
-	argParts = append(argParts, fmt.Sprintf("measurements: $%s", measVar))
-
-	// groupBy (optional)
-	if gb, ok := item.Params["groupBy"]; ok {
-		gbVar := "groupBy_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: [MetricTag!]", gbVar))
-		vars[gbVar] = gb
-		argParts = append(argParts, fmt.Sprintf("groupBy: $%s", gbVar))
-	}
-
-	// sampleRateSeconds (optional)
-	if sr, ok := item.Params["sampleRateSeconds"]; ok {
-		srVar := "sampleRateSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", srVar))
-		vars[srVar] = sr
-		argParts = append(argParts, fmt.Sprintf("sampleRateSeconds: $%s", srVar))
-	}
-
-	// averagingWindowSeconds (optional)
-	if aw, ok := item.Params["averagingWindowSeconds"]; ok {
-		awVar := "averagingWindowSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", awVar))
-		vars[awVar] = aw
-		argParts = append(argParts, fmt.Sprintf("averagingWindowSeconds: $%s", awVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("serviceId", item.Params["serviceId"].(string))
+	b.addLiteral("environmentId", item.Params["environmentId"].(string))
+	b.addVar("startDate", "DateTime!", item.Params["startDate"])
+	b.addOptionalVar("endDate", "DateTime")
+	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
+	b.addOptionalVar("groupBy", "[MetricTag!]")
+	b.addOptionalVar("sampleRateSeconds", "Int")
+	b.addOptionalVar("averagingWindowSeconds", "Int")
 
 	return AliasFragment{
 		Alias:           alias,
 		Field:           "metrics",
-		Args:            strings.Join(argParts, ", "),
+		Args:            b.args(),
 		Selection:       railway.MetricsFieldBody,
-		VarDecls:        decls,
-		VarValues:       vars,
+		VarDecls:        b.decls,
+		VarValues:       b.vars,
 		Breadth:         BreadthMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
@@ -352,57 +265,22 @@ func serviceMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragme
 
 func replicaMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_replica"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// serviceId and environmentId are literals
-	argParts = append(argParts, fmt.Sprintf("serviceId: %q", item.Params["serviceId"]))
-	argParts = append(argParts, fmt.Sprintf("environmentId: %q", item.Params["environmentId"]))
-
-	// startDate (required)
-	startVar := "startDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", startVar))
-	vars[startVar] = item.Params["startDate"]
-	argParts = append(argParts, fmt.Sprintf("startDate: $%s", startVar))
-
-	// endDate (optional)
-	if ed, ok := item.Params["endDate"]; ok {
-		endVar := "endDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", endVar))
-		vars[endVar] = ed
-		argParts = append(argParts, fmt.Sprintf("endDate: $%s", endVar))
-	}
-
-	// measurements
-	measVar := "measurements_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: [MetricMeasurement!]!", measVar))
-	vars[measVar] = item.Params["measurements"]
-	argParts = append(argParts, fmt.Sprintf("measurements: $%s", measVar))
-
-	// sampleRateSeconds (optional)
-	if sr, ok := item.Params["sampleRateSeconds"]; ok {
-		srVar := "sampleRateSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", srVar))
-		vars[srVar] = sr
-		argParts = append(argParts, fmt.Sprintf("sampleRateSeconds: $%s", srVar))
-	}
-
-	// averagingWindowSeconds (optional)
-	if aw, ok := item.Params["averagingWindowSeconds"]; ok {
-		awVar := "averagingWindowSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", awVar))
-		vars[awVar] = aw
-		argParts = append(argParts, fmt.Sprintf("averagingWindowSeconds: $%s", awVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("serviceId", item.Params["serviceId"].(string))
+	b.addLiteral("environmentId", item.Params["environmentId"].(string))
+	b.addVar("startDate", "DateTime!", item.Params["startDate"])
+	b.addOptionalVar("endDate", "DateTime")
+	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
+	b.addOptionalVar("sampleRateSeconds", "Int")
+	b.addOptionalVar("averagingWindowSeconds", "Int")
 
 	return AliasFragment{
 		Alias:           alias,
 		Field:           "replicaMetrics",
-		Args:            strings.Join(argParts, ", "),
+		Args:            b.args(),
 		Selection:       railway.ReplicaMetricsFieldBody,
-		VarDecls:        decls,
-		VarValues:       vars,
+		VarDecls:        b.decls,
+		VarValues:       b.vars,
 		Breadth:         BreadthReplicaMetrics,
 		EstimatedPoints: estimateMetricPoints(item.Params, nowFunc),
 		Item:            item,
@@ -411,41 +289,20 @@ func replicaMetricsFragment(item WorkItem, nowFunc func() time.Time) AliasFragme
 
 func httpDurationMetricsFragment(item WorkItem) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpdur"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// serviceId and environmentId are literals
-	argParts = append(argParts, fmt.Sprintf("serviceId: %q", item.Params["serviceId"]))
-	argParts = append(argParts, fmt.Sprintf("environmentId: %q", item.Params["environmentId"]))
-
-	// startDate (required)
-	startVar := "startDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", startVar))
-	vars[startVar] = item.Params["startDate"]
-	argParts = append(argParts, fmt.Sprintf("startDate: $%s", startVar))
-
-	// endDate (required)
-	endVar := "endDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", endVar))
-	vars[endVar] = item.Params["endDate"]
-	argParts = append(argParts, fmt.Sprintf("endDate: $%s", endVar))
-
-	// stepSeconds (optional)
-	if ss, ok := item.Params["stepSeconds"]; ok {
-		ssVar := "stepSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", ssVar))
-		vars[ssVar] = ss
-		argParts = append(argParts, fmt.Sprintf("stepSeconds: $%s", ssVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("serviceId", item.Params["serviceId"].(string))
+	b.addLiteral("environmentId", item.Params["environmentId"].(string))
+	b.addVar("startDate", "DateTime!", item.Params["startDate"])
+	b.addVar("endDate", "DateTime!", item.Params["endDate"])
+	b.addOptionalVar("stepSeconds", "Int")
 
 	return AliasFragment{
 		Alias:           alias,
 		Field:           "httpDurationMetrics",
-		Args:            strings.Join(argParts, ", "),
+		Args:            b.args(),
 		Selection:       railway.HttpDurationMetricsFieldBody,
-		VarDecls:        decls,
-		VarValues:       vars,
+		VarDecls:        b.decls,
+		VarValues:       b.vars,
 		Breadth:         BreadthHttpDurationMetrics,
 		EstimatedPoints: estimateHttpMetricPoints(item.Params),
 		Item:            item,
@@ -454,41 +311,20 @@ func httpDurationMetricsFragment(item WorkItem) AliasFragment {
 
 func httpStatusMetricsFragment(item WorkItem) AliasFragment {
 	alias := sanitizeCompositeAlias(item.AliasKey) + "_httpstatus"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// serviceId and environmentId are literals
-	argParts = append(argParts, fmt.Sprintf("serviceId: %q", item.Params["serviceId"]))
-	argParts = append(argParts, fmt.Sprintf("environmentId: %q", item.Params["environmentId"]))
-
-	// startDate (required)
-	startVar := "startDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", startVar))
-	vars[startVar] = item.Params["startDate"]
-	argParts = append(argParts, fmt.Sprintf("startDate: $%s", startVar))
-
-	// endDate (required)
-	endVar := "endDate_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: DateTime!", endVar))
-	vars[endVar] = item.Params["endDate"]
-	argParts = append(argParts, fmt.Sprintf("endDate: $%s", endVar))
-
-	// stepSeconds (optional)
-	if ss, ok := item.Params["stepSeconds"]; ok {
-		ssVar := "stepSeconds_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: Int", ssVar))
-		vars[ssVar] = ss
-		argParts = append(argParts, fmt.Sprintf("stepSeconds: $%s", ssVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("serviceId", item.Params["serviceId"].(string))
+	b.addLiteral("environmentId", item.Params["environmentId"].(string))
+	b.addVar("startDate", "DateTime!", item.Params["startDate"])
+	b.addVar("endDate", "DateTime!", item.Params["endDate"])
+	b.addOptionalVar("stepSeconds", "Int")
 
 	return AliasFragment{
 		Alias:           alias,
 		Field:           "httpMetricsGroupedByStatus",
-		Args:            strings.Join(argParts, ", "),
+		Args:            b.args(),
 		Selection:       railway.HttpMetricsGroupedByStatusFieldBody,
-		VarDecls:        decls,
-		VarValues:       vars,
+		VarDecls:        b.decls,
+		VarValues:       b.vars,
 		Breadth:         BreadthHttpMetricsGroupedByStatus,
 		EstimatedPoints: estimateHttpMetricPoints(item.Params),
 		Item:            item,
@@ -497,50 +333,20 @@ func httpStatusMetricsFragment(item WorkItem) AliasFragment {
 
 func usageFragment(item WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_usage"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// projectId is a literal
-	argParts = append(argParts, fmt.Sprintf("projectId: %q", item.AliasKey))
-
-	// measurements (required)
-	measVar := "measurements_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: [MetricMeasurement!]!", measVar))
-	vars[measVar] = item.Params["measurements"]
-	argParts = append(argParts, fmt.Sprintf("measurements: $%s", measVar))
-
-	// startDate (optional)
-	if sd, ok := item.Params["startDate"]; ok {
-		sdVar := "startDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", sdVar))
-		vars[sdVar] = sd
-		argParts = append(argParts, fmt.Sprintf("startDate: $%s", sdVar))
-	}
-
-	// endDate (optional)
-	if ed, ok := item.Params["endDate"]; ok {
-		edVar := "endDate_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: DateTime", edVar))
-		vars[edVar] = ed
-		argParts = append(argParts, fmt.Sprintf("endDate: $%s", edVar))
-	}
-
-	// groupBy (optional)
-	if gb, ok := item.Params["groupBy"]; ok {
-		gbVar := "groupBy_" + alias
-		decls = append(decls, fmt.Sprintf("$%s: [MetricTag!]", gbVar))
-		vars[gbVar] = gb
-		argParts = append(argParts, fmt.Sprintf("groupBy: $%s", gbVar))
-	}
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("projectId", item.AliasKey)
+	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
+	b.addOptionalVar("startDate", "DateTime")
+	b.addOptionalVar("endDate", "DateTime")
+	b.addOptionalVar("groupBy", "[MetricTag!]")
 
 	return AliasFragment{
 		Alias:     alias,
 		Field:     "usage",
-		Args:      strings.Join(argParts, ", "),
+		Args:      b.args(),
 		Selection: railway.UsageFieldBody,
-		VarDecls:  decls,
-		VarValues: vars,
+		VarDecls:  b.decls,
+		VarValues: b.vars,
 		Breadth:   BreadthUsage,
 		Item:      item,
 	}
@@ -548,26 +354,17 @@ func usageFragment(item WorkItem) AliasFragment {
 
 func estimatedUsageFragment(item WorkItem) AliasFragment {
 	alias := railway.SanitizeAlias(item.AliasKey) + "_estusage"
-	vars := make(map[string]any)
-	var decls []string
-	var argParts []string
-
-	// projectId is a literal
-	argParts = append(argParts, fmt.Sprintf("projectId: %q", item.AliasKey))
-
-	// measurements (required)
-	measVar := "measurements_" + alias
-	decls = append(decls, fmt.Sprintf("$%s: [MetricMeasurement!]!", measVar))
-	vars[measVar] = item.Params["measurements"]
-	argParts = append(argParts, fmt.Sprintf("measurements: $%s", measVar))
+	b := newFragmentBuilder(alias, item.Params)
+	b.addLiteral("projectId", item.AliasKey)
+	b.addVar("measurements", "[MetricMeasurement!]!", item.Params["measurements"])
 
 	return AliasFragment{
 		Alias:     alias,
 		Field:     "estimatedUsage",
-		Args:      strings.Join(argParts, ", "),
+		Args:      b.args(),
 		Selection: railway.EstimatedUsageFieldBody,
-		VarDecls:  decls,
-		VarValues: vars,
+		VarDecls:  b.decls,
+		VarValues: b.vars,
 		Breadth:   BreadthEstimatedUsage,
 		Item:      item,
 	}
