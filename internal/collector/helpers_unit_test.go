@@ -1,6 +1,9 @@
 package collector
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"log/slog"
 	"testing"
 	"time"
@@ -8,10 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/xevion/railway-collector/internal/collector/coverage"
 	"github.com/xevion/railway-collector/internal/collector/loader"
 	"github.com/xevion/railway-collector/internal/collector/types"
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
+	"github.com/xevion/railway-collector/internal/sink"
 )
 
 // Test_measurementToMetricName_KnownMeasurements verifies that all known
@@ -577,6 +582,464 @@ func Test_deliveryLogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := deliveryLogLevel(tt.count)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Test_applyConfigDefaults verifies that applyConfigDefaults fills zero-valued
+// fields with defaults and preserves non-zero values.
+func Test_applyConfigDefaults(t *testing.T) {
+	customMeasurements := []railway.MetricMeasurement{
+		railway.MetricMeasurementCpuUsage,
+		railway.MetricMeasurementMemoryUsageGb,
+	}
+	fallbackMeasurements := []railway.MetricMeasurement{
+		railway.MetricMeasurementDiskUsageGb,
+	}
+
+	tests := []struct {
+		name                string
+		cfg                 BaseMetricsConfig
+		defaults            []railway.MetricMeasurement
+		wantMeasurements    []railway.MetricMeasurement
+		wantRetention       time.Duration
+		wantChunkSize       time.Duration
+		wantMaxItemsPerPoll int
+	}{
+		{
+			name:                "empty measurements uses defaults",
+			cfg:                 BaseMetricsConfig{},
+			defaults:            fallbackMeasurements,
+			wantMeasurements:    fallbackMeasurements,
+			wantRetention:       90 * 24 * time.Hour,
+			wantChunkSize:       6 * time.Hour,
+			wantMaxItemsPerPoll: 10,
+		},
+		{
+			name: "non-empty measurements preserved",
+			cfg: BaseMetricsConfig{
+				Measurements: customMeasurements,
+			},
+			defaults:            fallbackMeasurements,
+			wantMeasurements:    customMeasurements,
+			wantRetention:       90 * 24 * time.Hour,
+			wantChunkSize:       6 * time.Hour,
+			wantMaxItemsPerPoll: 10,
+		},
+		{
+			name: "non-zero fields preserved",
+			cfg: BaseMetricsConfig{
+				Measurements:    customMeasurements,
+				MetricRetention: 7 * 24 * time.Hour,
+				ChunkSize:       1 * time.Hour,
+				MaxItemsPerPoll: 50,
+			},
+			defaults:            fallbackMeasurements,
+			wantMeasurements:    customMeasurements,
+			wantRetention:       7 * 24 * time.Hour,
+			wantChunkSize:       1 * time.Hour,
+			wantMaxItemsPerPoll: 50,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			got := applyConfigDefaults(&cfg, tt.defaults)
+			assert.Equal(t, tt.wantMeasurements, got)
+			assert.Equal(t, tt.wantRetention, cfg.MetricRetention)
+			assert.Equal(t, tt.wantChunkSize, cfg.ChunkSize)
+			assert.Equal(t, tt.wantMaxItemsPerPoll, cfg.MaxItemsPerPoll)
+		})
+	}
+}
+
+// Test_environmentServiceLookup verifies service map construction and envName
+// extraction from targets matching a given environment ID.
+func Test_environmentServiceLookup(t *testing.T) {
+	tests := []struct {
+		name         string
+		envID        string
+		targets      []types.ServiceTarget
+		wantServices map[string]types.ServiceTarget
+		wantEnvName  string
+	}{
+		{
+			name:  "no matching targets",
+			envID: "env-missing",
+			targets: []types.ServiceTarget{
+				{ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production"},
+			},
+			wantServices: map[string]types.ServiceTarget{},
+			wantEnvName:  "",
+		},
+		{
+			name:  "single match",
+			envID: "env-1",
+			targets: []types.ServiceTarget{
+				{ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "web"},
+			},
+			wantServices: map[string]types.ServiceTarget{
+				"svc-1": {ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "web"},
+			},
+			wantEnvName: "production",
+		},
+		{
+			name:  "multiple services same env, envName from first match",
+			envID: "env-1",
+			targets: []types.ServiceTarget{
+				{ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "web"},
+				{ServiceID: "svc-2", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "api"},
+				{ServiceID: "svc-3", EnvironmentID: "env-2", EnvironmentName: "staging", ServiceName: "worker"},
+			},
+			wantServices: map[string]types.ServiceTarget{
+				"svc-1": {ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "web"},
+				"svc-2": {ServiceID: "svc-2", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "api"},
+			},
+			wantEnvName: "production",
+		},
+		{
+			name:  "filters to only matching env",
+			envID: "env-2",
+			targets: []types.ServiceTarget{
+				{ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production", ServiceName: "web"},
+				{ServiceID: "svc-2", EnvironmentID: "env-2", EnvironmentName: "staging", ServiceName: "api"},
+			},
+			wantServices: map[string]types.ServiceTarget{
+				"svc-2": {ServiceID: "svc-2", EnvironmentID: "env-2", EnvironmentName: "staging", ServiceName: "api"},
+			},
+			wantEnvName: "staging",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			services, envName := environmentServiceLookup(tt.envID, tt.targets)
+			assert.Equal(t, tt.wantEnvName, envName)
+			assert.Equal(t, tt.wantServices, services)
+		})
+	}
+}
+
+// Test_copyLabels verifies that copyLabels produces an independent copy of a
+// label map: all entries are preserved, and mutations to the copy do not
+// affect the original.
+func Test_copyLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		src  map[string]string
+		want map[string]string
+	}{
+		{
+			name: "copies all entries",
+			src:  map[string]string{"a": "1", "b": "2", "c": "3"},
+			want: map[string]string{"a": "1", "b": "2", "c": "3"},
+		},
+		{
+			name: "empty map returns empty map",
+			src:  map[string]string{},
+			want: map[string]string{},
+		},
+		{
+			name: "single entry",
+			src:  map[string]string{"key": "val"},
+			want: map[string]string{"key": "val"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := copyLabels(tt.src)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("mutation independence", func(t *testing.T) {
+		original := map[string]string{"a": "1", "b": "2"}
+		copied := copyLabels(original)
+
+		// Mutate the copy
+		copied["a"] = "changed"
+		copied["new"] = "added"
+
+		// Original must be unaffected
+		assert.Equal(t, "1", original["a"])
+		_, hasNew := original["new"]
+		assert.False(t, hasNew, "original should not have the key added to the copy")
+		assert.Len(t, original, 2)
+	})
+}
+
+// unitTestSink is a minimal sink.Sink for internal (package collector) tests.
+type unitTestSink struct {
+	name         string
+	writeMetrics func(context.Context, []sink.MetricPoint) error
+	writeLogs    func(context.Context, []sink.LogEntry) error
+}
+
+func (s *unitTestSink) Name() string { return s.name }
+func (s *unitTestSink) WriteMetrics(ctx context.Context, m []sink.MetricPoint) error {
+	if s.writeMetrics != nil {
+		return s.writeMetrics(ctx, m)
+	}
+	return nil
+}
+func (s *unitTestSink) WriteLogs(ctx context.Context, l []sink.LogEntry) error {
+	if s.writeLogs != nil {
+		return s.writeLogs(ctx, l)
+	}
+	return nil
+}
+func (s *unitTestSink) Close() error { return nil }
+
+// Test_writeMetricsToSinks verifies that writeMetricsToSinks calls sinks only
+// when there are points, and handles sink errors without panicking.
+func Test_writeMetricsToSinks(t *testing.T) {
+	noopLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("empty points does not call sink", func(t *testing.T) {
+		called := false
+		s := &unitTestSink{
+			name: "test",
+			writeMetrics: func(_ context.Context, _ []sink.MetricPoint) error {
+				called = true
+				return nil
+			},
+		}
+		writeMetricsToSinks(context.Background(), []sink.Sink{s}, nil, noopLogger)
+		assert.False(t, called, "sink should not be called for empty points")
+	})
+
+	t.Run("empty slice does not call sink", func(t *testing.T) {
+		called := false
+		s := &unitTestSink{
+			name: "test",
+			writeMetrics: func(_ context.Context, _ []sink.MetricPoint) error {
+				called = true
+				return nil
+			},
+		}
+		writeMetricsToSinks(context.Background(), []sink.Sink{s}, []sink.MetricPoint{}, noopLogger)
+		assert.False(t, called, "sink should not be called for empty slice")
+	})
+
+	t.Run("non-empty points calls sink", func(t *testing.T) {
+		var received []sink.MetricPoint
+		s := &unitTestSink{
+			name: "test",
+			writeMetrics: func(_ context.Context, pts []sink.MetricPoint) error {
+				received = pts
+				return nil
+			},
+		}
+		points := []sink.MetricPoint{{Name: "metric1", Value: 42.0}}
+		writeMetricsToSinks(context.Background(), []sink.Sink{s}, points, noopLogger)
+		require.Len(t, received, 1)
+		assert.Equal(t, "metric1", received[0].Name)
+	})
+
+	t.Run("multiple sinks all called", func(t *testing.T) {
+		callCount := 0
+		makeSink := func(name string) sink.Sink {
+			return &unitTestSink{
+				name: name,
+				writeMetrics: func(_ context.Context, _ []sink.MetricPoint) error {
+					callCount++
+					return nil
+				},
+			}
+		}
+		sinks := []sink.Sink{makeSink("a"), makeSink("b")}
+		points := []sink.MetricPoint{{Name: "m", Value: 1}}
+		writeMetricsToSinks(context.Background(), sinks, points, noopLogger)
+		assert.Equal(t, 2, callCount, "both sinks should be called")
+	})
+
+	t.Run("sink error does not panic", func(t *testing.T) {
+		s := &unitTestSink{
+			name: "failing",
+			writeMetrics: func(_ context.Context, _ []sink.MetricPoint) error {
+				return fmt.Errorf("write failed")
+			},
+		}
+		points := []sink.MetricPoint{{Name: "m", Value: 1}}
+		assert.NotPanics(t, func() {
+			writeMetricsToSinks(context.Background(), []sink.Sink{s}, points, noopLogger)
+		})
+	})
+}
+
+// Test_writeLogsToSinks verifies that writeLogsToSinks calls sinks only when
+// there are entries, and handles sink errors without panicking.
+func Test_writeLogsToSinks(t *testing.T) {
+	noopLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("empty entries does not call sink", func(t *testing.T) {
+		called := false
+		s := &unitTestSink{
+			name: "test",
+			writeLogs: func(_ context.Context, _ []sink.LogEntry) error {
+				called = true
+				return nil
+			},
+		}
+		writeLogsToSinks(context.Background(), []sink.Sink{s}, nil, noopLogger)
+		assert.False(t, called, "sink should not be called for nil entries")
+	})
+
+	t.Run("empty slice does not call sink", func(t *testing.T) {
+		called := false
+		s := &unitTestSink{
+			name: "test",
+			writeLogs: func(_ context.Context, _ []sink.LogEntry) error {
+				called = true
+				return nil
+			},
+		}
+		writeLogsToSinks(context.Background(), []sink.Sink{s}, []sink.LogEntry{}, noopLogger)
+		assert.False(t, called, "sink should not be called for empty slice")
+	})
+
+	t.Run("non-empty entries calls sink", func(t *testing.T) {
+		var received []sink.LogEntry
+		s := &unitTestSink{
+			name: "test",
+			writeLogs: func(_ context.Context, entries []sink.LogEntry) error {
+				received = entries
+				return nil
+			},
+		}
+		entries := []sink.LogEntry{{Message: "hello", Severity: "INFO"}}
+		writeLogsToSinks(context.Background(), []sink.Sink{s}, entries, noopLogger)
+		require.Len(t, received, 1)
+		assert.Equal(t, "hello", received[0].Message)
+	})
+
+	t.Run("multiple sinks all called", func(t *testing.T) {
+		callCount := 0
+		makeSink := func(name string) sink.Sink {
+			return &unitTestSink{
+				name: name,
+				writeLogs: func(_ context.Context, _ []sink.LogEntry) error {
+					callCount++
+					return nil
+				},
+			}
+		}
+		sinks := []sink.Sink{makeSink("a"), makeSink("b")}
+		entries := []sink.LogEntry{{Message: "log"}}
+		writeLogsToSinks(context.Background(), sinks, entries, noopLogger)
+		assert.Equal(t, 2, callCount, "both sinks should be called")
+	})
+
+	t.Run("sink error does not panic", func(t *testing.T) {
+		s := &unitTestSink{
+			name: "failing",
+			writeLogs: func(_ context.Context, _ []sink.LogEntry) error {
+				return fmt.Errorf("write failed")
+			},
+		}
+		entries := []sink.LogEntry{{Message: "log"}}
+		assert.NotPanics(t, func() {
+			writeLogsToSinks(context.Background(), []sink.Sink{s}, entries, noopLogger)
+		})
+	})
+}
+
+// Test_pollCoverageGaps_BudgetExact verifies that pollCoverageGaps emits
+// exactly maxItemsPerPoll items when more gaps are available than budget
+// allows. This kills CONDITIONALS_BOUNDARY mutants on the budget checks.
+func Test_pollCoverageGaps_BudgetExact(t *testing.T) {
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name         string
+		maxItems     int
+		entityCount  int
+		itemsPerEmit int
+		wantItems    int // expected number of emitted WorkItems
+	}{
+		{
+			name:         "budget 3, 5 entities, 1 per emit",
+			maxItems:     3,
+			entityCount:  5,
+			itemsPerEmit: 1,
+			wantItems:    3,
+		},
+		{
+			name:         "budget 4, 5 entities, 2 per emit",
+			maxItems:     4,
+			entityCount:  5,
+			itemsPerEmit: 2,
+			// 2 entities fit (2*2=4), third doesn't (4+2=6 > 4)
+			wantItems: 4,
+		},
+		{
+			name:         "budget 1, 3 entities, 1 per emit",
+			maxItems:     1,
+			entityCount:  3,
+			itemsPerEmit: 1,
+			wantItems:    1,
+		},
+		{
+			name:         "budget equals entity count",
+			maxItems:     3,
+			entityCount:  3,
+			itemsPerEmit: 1,
+			wantItems:    3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build targets and entities
+			var targets []types.ServiceTarget
+			for i := 0; i < tt.entityCount; i++ {
+				targets = append(targets, types.ServiceTarget{
+					ProjectID:     fmt.Sprintf("proj-%d", i),
+					ServiceID:     fmt.Sprintf("svc-%d", i),
+					EnvironmentID: fmt.Sprintf("env-%d", i),
+				})
+			}
+
+			builder := func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+				var items []types.WorkItem
+				for j := 0; j < tt.itemsPerEmit; j++ {
+					items = append(items, types.WorkItem{
+						ID:       fmt.Sprintf("%s:%d", e.Key, j),
+						Kind:     types.QueryMetrics,
+						AliasKey: e.Key,
+					})
+				}
+				return items
+			}
+
+			items := pollCoverageGaps(now, gapPollParams{
+				store:     &fakeStateStore{},
+				discovery: &fakeTargetProvider{targets: targets},
+				logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+				// Short retention so each entity has a small gap (no chunking needed)
+				metricRetention: 30 * time.Minute,
+				chunkSize:       6 * time.Hour,
+				maxItemsPerPoll: tt.maxItems,
+				nextPoll:        time.Time{},
+				entities: func(tgts []types.ServiceTarget) []pollEntity {
+					var entities []pollEntity
+					for _, tgt := range tgts {
+						entities = append(entities, pollEntity{
+							Key:          tgt.ProjectID,
+							CoverageType: coverage.CoverageTypeMetric,
+						})
+					}
+					return entities
+				},
+				buildItems:   builder,
+				itemsPerEmit: tt.itemsPerEmit,
+				logPrefix:    "test",
+			})
+
+			assert.Equal(t, tt.wantItems, len(items),
+				"should emit exactly maxItemsPerPoll items when budget is the limiting factor")
 		})
 	}
 }

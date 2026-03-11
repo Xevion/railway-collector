@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,32 @@ import (
 	"github.com/xevion/railway-collector/internal/railway"
 	"go.uber.org/mock/gomock"
 )
+
+// countingHandler is a slog.Handler that counts log records matching a pattern.
+type countingHandler struct {
+	inner   slog.Handler
+	pattern string
+	count   *atomic.Int32
+}
+
+func (h *countingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner.Enabled(ctx, level)
+}
+
+func (h *countingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, h.pattern) {
+		h.count.Add(1)
+	}
+	return h.inner.Handle(ctx, r)
+}
+
+func (h *countingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &countingHandler{inner: h.inner.WithAttrs(attrs), pattern: h.pattern, count: h.count}
+}
+
+func (h *countingHandler) WithGroup(name string) slog.Handler {
+	return &countingHandler{inner: h.inner.WithGroup(name), pattern: h.pattern, count: h.count}
+}
 
 // stubGenerator implements TaskGenerator with configurable behavior for testing.
 type stubGenerator struct {
@@ -416,6 +443,663 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	assert.Equal(t, credit.RegimeScarce, credits.Regime())
 
 	cancel()
+}
+
+func TestUnifiedScheduler_DefaultConfig(t *testing.T) {
+	// Verify that zero-value config fields get defaults applied.
+	// TickInterval=0 -> 1s, MaxRPS=0 -> 16/60, DrainTimeout=0 -> 5s.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).Times(1)
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	// Create scheduler with all zero config values to test defaults.
+	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
+		Clock:      fakeClock,
+		API:        api,
+		Credits:    credits,
+		Generators: []types.TaskGenerator{gen},
+		Logger:     slog.Default(),
+		// TickInterval, MaxRPS, DrainTimeout all zero -> defaults.
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	// Default TickInterval is 1s, so advancing 500ms should NOT trigger a tick.
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, gen.getDeliveries(), "should not tick before 1s default interval")
+
+	// Advance past 1s total to trigger the tick.
+	fakeClock.Advance(600 * time.Millisecond)
+	deliveries := gen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, deliveries, 1)
+	assert.Nil(t, deliveries[0].Err)
+
+	cancel()
+}
+
+func TestUnifiedScheduler_NonDefaultConfig(t *testing.T) {
+	// Verify that non-zero config values are preserved (not overwritten by defaults).
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).Times(1)
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	// Explicit non-zero values.
+	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
+		Clock:        fakeClock,
+		API:          api,
+		Credits:      credits,
+		Generators:   []types.TaskGenerator{gen},
+		Logger:       slog.Default(),
+		TickInterval: 2 * time.Second,
+		MaxRPS:       50.0,
+		DrainTimeout: 10 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	// With 2s tick interval, 1.5s advance should NOT trigger a tick.
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(1500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, gen.getDeliveries(), "should not tick before 2s custom interval")
+
+	// Advance past 2s total.
+	fakeClock.Advance(600 * time.Millisecond)
+	deliveries := gen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, deliveries, 1)
+
+	cancel()
+}
+
+func TestUnifiedScheduler_EmptyGeneratorPoll(t *testing.T) {
+	// When a generator returns empty items, tick should not call RawQuery.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: nil, // empty poll
+	}
+
+	// RawQuery should NOT be called.
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+
+	assert.Greater(t, gen.pollCount.Load(), int32(0), "generator should have been polled")
+	assert.Empty(t, gen.getDeliveries(), "no deliveries expected for empty poll")
+
+	cancel()
+}
+
+func TestUnifiedScheduler_SingleFragmentComputationLimitNoRetry(t *testing.T) {
+	// When a single-fragment batch hits "Problem processing request",
+	// it should NOT retry individually (len(req.Fragments) > 1 is false).
+	// The error should be delivered directly to the generator.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
+			newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z"),
+		},
+	}
+
+	callCount := atomic.Int32{}
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			callCount.Add(1)
+			return nil, fmt.Errorf("Problem processing request: computation limit exceeded")
+		}).Times(1) // exactly 1 call - no retry
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	deliveries := gen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, deliveries, 1)
+	assert.Error(t, deliveries[0].Err, "error should be delivered, not retried")
+	assert.Contains(t, deliveries[0].Err.Error(), "Problem processing request")
+	assert.Equal(t, int32(1), callCount.Load(), "should have made exactly 1 API call (no retry)")
+
+	cancel()
+}
+
+func TestUnifiedScheduler_GraphQLErrorNoComputationMessage(t *testing.T) {
+	// GraphQL errors without "Problem processing request" should NOT trigger
+	// individual retry - error should be delivered via DispatchRequestResults.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType: types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{
+			newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z"),
+			newMetricsWorkItem("proj-b", "2025-01-02T00:00:00Z", "2025-01-02T01:00:00Z"),
+		},
+	}
+
+	callCount := atomic.Int32{}
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			callCount.Add(1)
+			return &railway.RawQueryResponse{
+				Data: map[string]json.RawMessage{},
+				Errors: []railway.GraphQLError{
+					{Message: "Some other GraphQL error that is not computation related"},
+				},
+			}, nil
+		}).Times(1) // exactly 1 call - no retry
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	deliveries := gen.waitForDeliveries(t, 2, 2*time.Second)
+	assert.Len(t, deliveries, 2)
+	// Both items should receive the error (not retried individually).
+	for _, d := range deliveries {
+		assert.Error(t, d.Err)
+		assert.Contains(t, d.Err.Error(), "Some other GraphQL error")
+	}
+	assert.Equal(t, int32(1), callCount.Load(), "should NOT retry for non-computation errors")
+
+	cancel()
+}
+
+func TestUnifiedScheduler_DiscoveryPiggybackWithQueries(t *testing.T) {
+	// When both metrics and discovery items are present in the same tick,
+	// both the query AND discovery.Refresh() should execute (piggyback behavior).
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	disc := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	disc.EXPECT().Refresh(gomock.Any()).Return(nil).Times(1)
+	disc.EXPECT().Targets().Return([]types.ServiceTarget{}).AnyTimes()
+
+	metricsGen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	discoveryGen := collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
+		Discovery: disc,
+		Interval:  0, // always ready
+		Logger:    slog.Default(),
+	})
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).Times(1)
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), metricsGen, discoveryGen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	// Metrics should be delivered.
+	metricsDeliveries := metricsGen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, metricsDeliveries, 1)
+	assert.Nil(t, metricsDeliveries[0].Err)
+
+	// Give time for discovery refresh to complete (piggybacked after query).
+	time.Sleep(500 * time.Millisecond)
+
+	cancel()
+	// gomock verifies Refresh was called exactly once (piggyback).
+}
+
+func TestUnifiedScheduler_PartialCreditDeduction(t *testing.T) {
+	// Set up metrics + logs generators. Drain logs credits so only metrics
+	// gets credited. Verify metrics items execute but logs are skipped.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	metricsGen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	logsGen := &stubGenerator{
+		taskType: types.TaskTypeLogs,
+		pollItems: []types.WorkItem{
+			{
+				ID: "envlogs:env-a", Kind: types.QueryEnvironmentLogs,
+				TaskType: types.TaskTypeLogs, AliasKey: "env-a",
+				BatchKey: "limit=500",
+				Params: map[string]any{
+					"afterDate":  "2024-01-01T00:00:00Z",
+					"afterLimit": 500,
+				},
+			},
+		},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	// Only metrics should be in the query (logs skipped).
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
+			return &railway.RawQueryResponse{
+				Data: map[string]json.RawMessage{
+					aliasA: json.RawMessage(`[]`),
+				},
+			}, nil
+		}).Times(1)
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	// Exhaust logs credits by switching to exhausted regime, draining, then back.
+	credits.UpdateRegime(0, 1000, 3600) // exhausted - zeroes all rates
+	credits.TryDeduct(types.TaskTypeLogs, fakeClock.Now())
+	credits.TryDeduct(types.TaskTypeLogs, fakeClock.Now())
+	// Restore metrics rate but keep logs drained.
+	credits.UpdateRegime(600, 1000, 3600) // abundant regime (restores rates)
+	// Now immediately drain logs credit (it starts with tokens from regime change).
+	for credits.TryDeduct(types.TaskTypeLogs, fakeClock.Now()) {
+		// drain all logs credits
+	}
+	// Ensure metrics has a credit.
+	// The abundant regime restored metrics rate, and pool starts with some tokens.
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), metricsGen, logsGen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	// Metrics should be delivered.
+	metricsDeliveries := metricsGen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, metricsDeliveries, 1)
+	assert.Nil(t, metricsDeliveries[0].Err)
+
+	// Logs should NOT be delivered (no credits).
+	time.Sleep(300 * time.Millisecond)
+	assert.Empty(t, logsGen.getDeliveries(), "logs should be skipped due to no credits")
+
+	cancel()
+}
+
+func TestUnifiedScheduler_UpdateRateState_ExhaustedRemaining(t *testing.T) {
+	// When remaining=0 after a query, the rate limiter should be set to minimum (0.001).
+	// Verify by checking the regime becomes Exhausted.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).AnyTimes()
+
+	// remaining=0 -> exhausted regime, rate limiter set to 0.001.
+	api.EXPECT().RateLimitInfo().Return(0, fakeClock.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	gen.waitForDeliveries(t, 1, 2*time.Second)
+
+	assert.Equal(t, credit.RegimeExhausted, credits.Regime())
+
+	cancel()
+}
+
+func TestUnifiedScheduler_UpdateRateState_HighRemaining(t *testing.T) {
+	// remaining=900, resetAt=now+3600s. availableRate = 900/3600 = 0.25.
+	// targetRate = 0.25 * 0.9 = 0.225. MaxRPS default = 16/60 ~ 0.267.
+	// Since targetRate < MaxRPS, limiter should be set to targetRate.
+	// Verify the regime becomes Abundant (900/1000 = 90%).
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).AnyTimes()
+
+	// 900 remaining out of estimated 1000 = 90% -> Abundant.
+	api.EXPECT().RateLimitInfo().Return(900, fakeClock.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	// Use default MaxRPS (16/60 ~ 0.267) by passing zero.
+	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
+		Clock:        fakeClock,
+		API:          api,
+		Credits:      credits,
+		Generators:   []types.TaskGenerator{gen},
+		Logger:       slog.Default(),
+		TickInterval: 100 * time.Millisecond,
+		// MaxRPS: 0 -> default 16/60 ~ 0.267
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	gen.waitForDeliveries(t, 1, 2*time.Second)
+
+	// Regime should be abundant with 90% remaining.
+	assert.Equal(t, credit.RegimeAbundant, credits.Regime())
+
+	cancel()
+}
+
+func TestUnifiedScheduler_UpdateRateState_RateCappedAtMaxRPS(t *testing.T) {
+	// remaining=50000, resetAt=now+10s. availableRate = 50000/10 = 5000.
+	// targetRate = 5000 * 0.9 = 4500. MaxRPS = 100.
+	// Since targetRate > MaxRPS, limiter should be capped at MaxRPS.
+	// Verify the regime stays Abundant.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).AnyTimes()
+
+	// Very high remaining with short reset -> computed rate >> MaxRPS.
+	api.EXPECT().RateLimitInfo().Return(50000, fakeClock.Now().Add(10*time.Second)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	gen.waitForDeliveries(t, 1, 2*time.Second)
+
+	// With 50000 remaining out of estimated 1000 limit, ratio > 50% -> Abundant.
+	assert.Equal(t, credit.RegimeAbundant, credits.Regime())
+
+	cancel()
+}
+
+func TestUnifiedScheduler_UpdateRateState_LowRemainingPositive(t *testing.T) {
+	// remaining=1, resetAt=now+3600s. availableRate = 1/3600 ~ 0.000278.
+	// targetRate = 0.000278 * 0.9 ~ 0.00025. Min is 0.01, so should be clamped to 0.01.
+	// remaining=1 out of 1000 = 0.1% -> Exhausted (remaining <= 0 check is false,
+	// but ratio < 0.10 -> Scarce). Actually ratio = 0.001 < 0.10, so Scarce.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: []types.WorkItem{newMetricsWorkItem("proj-a", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z")},
+	}
+
+	aliasA := railway.SanitizeAlias("proj-a")
+
+	api.EXPECT().RawQuery(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&railway.RawQueryResponse{
+			Data: map[string]json.RawMessage{
+				aliasA: json.RawMessage(`[]`),
+			},
+		}, nil).AnyTimes()
+
+	// remaining=1 -> scarce (0.1%), not exhausted (remaining > 0).
+	api.EXPECT().RateLimitInfo().Return(1, fakeClock.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+
+	gen.waitForDeliveries(t, 1, 2*time.Second)
+
+	// remaining=1, ratio=0.001 < 0.10 -> Scarce (NOT Exhausted).
+	assert.Equal(t, credit.RegimeScarce, credits.Regime())
+
+	cancel()
+}
+
+func TestUnifiedScheduler_IdleLogThrottling(t *testing.T) {
+	// Verify logIdleStatus respects the 30s idle log interval.
+	// Multiple ticks within 30s should not flood idle logs.
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	gen := &stubGenerator{
+		taskType:  types.TaskTypeMetrics,
+		pollItems: nil, // always empty -> idle path
+	}
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+
+	// Use a recording logger to count idle log messages.
+	var idleLogCount atomic.Int32
+	logHandler := &countingHandler{
+		inner:   slog.Default().Handler(),
+		pattern: "scheduler idle",
+		count:   &idleLogCount,
+	}
+	logger := slog.New(logHandler)
+
+	s := newTestScheduler(t, fakeClock, api, credits, logger, gen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	// First tick: should log idle.
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	// Second tick within 30s: should NOT log idle again.
+	fakeClock.Advance(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	firstCount := idleLogCount.Load()
+
+	// Third tick: advance past 30s total -> should log idle again.
+	fakeClock.Advance(31 * time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	secondCount := idleLogCount.Load()
+	assert.Greater(t, secondCount, firstCount, "should log idle again after 30s interval")
+
+	cancel()
+}
+
+func TestUnifiedScheduler_DiscoveryOnlyNoCredits(t *testing.T) {
+	// When only discovery items are present but discovery has no credits,
+	// the scheduler should go idle (not crash or call Refresh).
+	ctrl := gomock.NewController(t)
+	api := mocks.NewMockRailwayAPI(ctrl)
+	disc := mocks.NewMockTargetProvider(ctrl)
+	fakeClock := clockwork.NewFakeClock()
+
+	// Refresh should NOT be called.
+	disc.EXPECT().Targets().Return([]types.ServiceTarget{}).AnyTimes()
+
+	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
+
+	discoveryGen := collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
+		Discovery: disc,
+		Interval:  0,
+		Logger:    slog.Default(),
+	})
+
+	credits := credit.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
+	// Exhaust discovery credits.
+	credits.UpdateRegime(0, 1000, 3600) // exhausted regime
+	credits.TryDeduct(types.TaskTypeDiscovery, fakeClock.Now())
+	credits.TryDeduct(types.TaskTypeDiscovery, fakeClock.Now())
+
+	s := newTestScheduler(t, fakeClock, api, credits, slog.Default(), discoveryGen)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go s.Run(ctx)
+
+	fakeClock.BlockUntil(1)
+	fakeClock.Advance(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+
+	cancel()
+	// gomock verifies Refresh was NOT called (no expectation set for it).
 }
 
 func TestUnifiedScheduler_RetriesOnComputationLimit(t *testing.T) {

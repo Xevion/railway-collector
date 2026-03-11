@@ -252,7 +252,7 @@ func (cmd *RunCmd) Run(c *CLI) error {
 			Limit:           cfg.Collect.Logs.Limit,
 			Interval:        cfg.Collect.Logs.Interval,
 			LogRetention:    cfg.Collect.GapFill.LogRetention,
-			ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+			ChunkSize:       cfg.Collect.GapFill.LogChunkSize,
 			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
 			Logger:          logger,
 		}))

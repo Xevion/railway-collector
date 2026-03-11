@@ -73,6 +73,7 @@ type CreditsConfig struct {
 // Gap filling is integrated into the metrics and logs generators directly.
 type GapFillConfig struct {
 	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
+	LogChunkSize    time.Duration `koanf:"log_chunk_size"`
 	MetricRetention time.Duration `koanf:"metric_retention"`
 	LogRetention    time.Duration `koanf:"log_retention"`
 	MaxItemsPerPoll int           `koanf:"max_items_per_poll"`
@@ -190,6 +191,7 @@ func DefaultConfig() *Config {
 			},
 			GapFill: GapFillConfig{
 				MetricChunkSize: 10 * 24 * time.Hour,
+				LogChunkSize:    6 * time.Hour,
 				MetricRetention: 90 * 24 * time.Hour,
 				LogRetention:    5 * 24 * time.Hour,
 				MaxItemsPerPoll: 10,

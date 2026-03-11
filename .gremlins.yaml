@@ -2,7 +2,7 @@ unleash:
   exclude-files:
     - "internal/railway/generated\\.go$"
     - "internal/collector/mocks/.*\\.go$"
-  timeout-coefficient: 10
+  timeout-coefficient: 100
 
 mutants:
   invert-logical:

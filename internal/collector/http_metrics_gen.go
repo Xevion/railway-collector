@@ -88,6 +88,13 @@ func NewHttpMetricsGenerator(cfg HttpMetricsGeneratorConfig) *HttpMetricsGenerat
 		cfg.StepSeconds = 60
 	}
 
+	// Railway API enforces max 1000 data points per query.
+	// Cap chunk size so chunkSize / stepSeconds <= 1000.
+	maxChunk := time.Duration(cfg.StepSeconds) * 1000 * time.Second
+	if cfg.ChunkSize > maxChunk {
+		cfg.ChunkSize = maxChunk
+	}
+
 	return &HttpMetricsGenerator{
 		discovery:       cfg.Discovery,
 		store:           cfg.Store,

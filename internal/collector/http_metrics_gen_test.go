@@ -432,3 +432,78 @@ func TestHttpMetricsGenerator_Deliver_EmptyDurationResults(t *testing.T) {
 		emptyJSON,
 	)
 }
+
+func TestHttpMetricsGenerator_ChunkSizeCappedByStepSeconds(t *testing.T) {
+	tests := []struct {
+		name             string
+		chunkSize        time.Duration
+		stepSeconds      int
+		wantMaxChunkSecs int // chunkSize should be <= stepSeconds * 1000
+	}{
+		{
+			name:             "10d chunk with 60s step gets capped",
+			chunkSize:        10 * 24 * time.Hour,
+			stepSeconds:      60,
+			wantMaxChunkSecs: 60_000, // 60 * 1000
+		},
+		{
+			name:             "6h chunk with 60s step stays unchanged",
+			chunkSize:        6 * time.Hour,
+			stepSeconds:      60,
+			wantMaxChunkSecs: 60_000,
+		},
+		{
+			name:             "10d chunk with 900s step gets capped",
+			chunkSize:        10 * 24 * time.Hour,
+			stepSeconds:      900,
+			wantMaxChunkSecs: 900_000, // 900 * 1000
+		},
+		{
+			name:             "default step and default chunk",
+			chunkSize:        0, // defaults to 6h
+			stepSeconds:      0, // defaults to 60
+			wantMaxChunkSecs: 60_000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupGenTest(t)
+
+			env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
+				{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", EnvironmentName: "production"},
+			})
+			env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+
+			gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery:       env.Targets,
+				Store:           env.Store,
+				Clock:           env.Clock,
+				Interval:        30 * time.Second,
+				MetricRetention: 90 * 24 * time.Hour,
+				ChunkSize:       tt.chunkSize,
+				StepSeconds:     tt.stepSeconds,
+				MaxItemsPerPoll: 200,
+				Logger:          slog.Default(),
+			})
+
+			items := gen.Poll(env.Now)
+			require.NotEmpty(t, items)
+
+			// Every item's time range must fit within stepSeconds * 1000
+			maxChunk := time.Duration(tt.wantMaxChunkSecs) * time.Second
+			for _, item := range items {
+				startStr, _ := item.Params["startDate"].(string)
+				endStr, _ := item.Params["endDate"].(string)
+				start, err1 := time.Parse(time.RFC3339, startStr)
+				end, err2 := time.Parse(time.RFC3339, endStr)
+				require.NoError(t, err1, "item %s startDate parse", item.ID)
+				require.NoError(t, err2, "item %s endDate parse", item.ID)
+
+				dur := end.Sub(start)
+				assert.LessOrEqual(t, dur, maxChunk,
+					"item %s spans %v which exceeds max %v (stepSeconds*1000)", item.ID, dur, maxChunk)
+			}
+		})
+	}
+}
