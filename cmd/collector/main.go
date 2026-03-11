@@ -5,9 +5,13 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env from cwd if present; errors are ignored since the file is optional.
+	_ = godotenv.Load()
+
 	var c CLI
 	ctx := kong.Parse(&c,
 		kong.Name("collector"),

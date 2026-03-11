@@ -3,7 +3,6 @@ package state_test
 import (
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,10 +16,6 @@ func setupTestDB(t *testing.T) string {
 	// Create with read-write store to seed data
 	store, err := state.Open(path)
 	require.NoError(t, err)
-
-	// Seed log cursors
-	require.NoError(t, store.SetLogCursor("deploy-111", "build", time.Date(2026, 3, 10, 14, 0, 0, 0, time.UTC)))
-	require.NoError(t, store.SetLogCursor("deploy-111", "http", time.Date(2026, 3, 10, 14, 30, 0, 0, time.UTC)))
 
 	// Seed discovery cache
 	require.NoError(t, store.SetDiscoveryCache("proj-aaa", []byte(`{"targets":[],"expires_at":"2026-03-11T00:00:00Z"}`)))
@@ -47,7 +42,7 @@ func TestReader_LogCursors(t *testing.T) {
 
 	cursors, err := reader.LogCursors()
 	require.NoError(t, err)
-	assert.Len(t, cursors, 2)
+	assert.Empty(t, cursors)
 }
 
 func TestReader_DiscoveryEntries(t *testing.T) {
@@ -83,14 +78,13 @@ func TestReader_BucketStats(t *testing.T) {
 
 	stats, err := reader.BucketStats()
 	require.NoError(t, err)
-	assert.Len(t, stats, 4)
+	assert.Len(t, stats, 3)
 
 	counts := map[string]int{}
 	for _, s := range stats {
 		counts[s.Name] = s.Count
 	}
-	assert.Equal(t, 0, counts["metric_cursors"])
-	assert.Equal(t, 2, counts["log_cursors"])
+	assert.Equal(t, 0, counts["log_cursors"])
 	assert.Equal(t, 1, counts["discovery_cache"])
 	assert.Equal(t, 1, counts["coverage"])
 }
@@ -112,14 +106,14 @@ func TestReader_DeleteBucket(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 
-	count, err := reader.DeleteBucket("log_cursors")
+	count, err := reader.DeleteBucket("discovery_cache")
 	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 1, count)
 
 	// Verify empty
-	cursors, err := reader.LogCursors()
+	entries, err := reader.DiscoveryEntries()
 	require.NoError(t, err)
-	assert.Empty(t, cursors)
+	assert.Empty(t, entries)
 }
 
 func TestReader_DeleteKey(t *testing.T) {
@@ -128,13 +122,12 @@ func TestReader_DeleteKey(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 
-	err = reader.DeleteKey("log_cursors", "deploy-111:build")
+	err = reader.DeleteKey("discovery_cache", "proj-aaa")
 	require.NoError(t, err)
 
-	cursors, err := reader.LogCursors()
+	entries, err := reader.DiscoveryEntries()
 	require.NoError(t, err)
-	assert.Len(t, cursors, 1)
-	assert.Equal(t, "deploy-111:http", cursors[0].Key)
+	assert.Empty(t, entries)
 }
 
 func TestReader_DeleteKey_NotFound(t *testing.T) {

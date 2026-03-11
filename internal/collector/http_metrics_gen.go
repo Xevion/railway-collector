@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/jonboulle/clockwork"
@@ -321,30 +320,15 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []WorkItem {
 // Deliver processes the raw JSON response for an HTTP metrics work item.
 // It routes by item.Kind to handle the two different response shapes.
 func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
-	compositeKey := item.AliasKey
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
-
-	parts := strings.SplitN(compositeKey, ":", 2)
-	serviceID := parts[0]
-	environmentID := ""
-	if len(parts) > 1 {
-		environmentID = parts[1]
-	}
-
-	serviceName := ""
-	environmentName := ""
-	projectName := ""
-	projectID := ""
-	for _, t := range targets {
-		if t.ServiceID == serviceID && t.EnvironmentID == environmentID {
-			serviceName = t.ServiceName
-			environmentName = t.EnvironmentName
-			projectName = t.ProjectName
-			projectID = t.ProjectID
-			break
-		}
-	}
+	info := parseCompositeKey(item.AliasKey, targets)
+	serviceID := info.serviceID
+	environmentID := info.environmentID
+	serviceName := info.serviceName
+	environmentName := info.environmentName
+	projectName := info.projectName
+	projectID := info.projectID
 
 	if err != nil {
 		g.logger.Error("http metrics delivery failed",

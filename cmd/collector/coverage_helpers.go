@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -293,63 +292,4 @@ func expectedCoverageKeys(cfg *config.Config, targets []collector.ServiceTarget)
 // isLogCoverageKey returns true if the coverage key is for a log stream.
 func isLogCoverageKey(key string) bool {
 	return strings.Contains(key, ":log:")
-}
-
-// formatSummaryRows converts coverage summaries into table-ready string slices.
-// Returns headers, data rows, and a total/summary row.
-func formatSummaryRows(summaries []coverageSummary) (headers []string, rows [][]string, totalRow []string) {
-	headers = []string{"Key", "Collected", "Empty", "Gaps", "Gap Count", "Largest Gap", "Coverage"}
-
-	var totalCollected, totalEmpty, totalGaps time.Duration
-	var totalGapCount int
-	var maxLargestGap time.Duration
-
-	for _, s := range summaries {
-		largestGapStr := "0s"
-		if s.LargestGap > 0 {
-			largestGapStr = s.LargestGap.Round(time.Second).String()
-		}
-
-		rows = append(rows, []string{
-			s.Key,
-			s.Collected.Round(time.Second).String(),
-			s.Empty.Round(time.Second).String(),
-			s.Gaps.Round(time.Second).String(),
-			fmt.Sprintf("%d", s.GapCount),
-			largestGapStr,
-			fmt.Sprintf("%.1f%%", s.Percentage),
-		})
-
-		totalCollected += s.Collected
-		totalEmpty += s.Empty
-		totalGaps += s.Gaps
-		totalGapCount += s.GapCount
-		if s.LargestGap > maxLargestGap {
-			maxLargestGap = s.LargestGap
-		}
-	}
-
-	// Overall percentage
-	overallTotal := totalCollected + totalEmpty + totalGaps
-	var overallPct float64
-	if overallTotal > 0 {
-		overallPct = float64(totalCollected) / float64(overallTotal) * 100
-	}
-
-	totalLargestGapStr := "0s"
-	if maxLargestGap > 0 {
-		totalLargestGapStr = maxLargestGap.Round(time.Second).String()
-	}
-
-	totalRow = []string{
-		"Total",
-		totalCollected.Round(time.Second).String(),
-		totalEmpty.Round(time.Second).String(),
-		totalGaps.Round(time.Second).String(),
-		fmt.Sprintf("%d", totalGapCount),
-		totalLargestGapStr,
-		fmt.Sprintf("%.1f%%", overallPct),
-	}
-
-	return headers, rows, totalRow
 }

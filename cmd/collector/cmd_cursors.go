@@ -11,7 +11,7 @@ import (
 // CursorsCmd shows metric and log cursor timestamps.
 type CursorsCmd struct {
 	Stale  time.Duration `help:"Highlight cursors older than this duration." default:"0"`
-	Bucket string        `help:"Filter by bucket: metric, log, or empty for both." enum:"metric,log," default:""`
+	Bucket string        `help:"Filter by bucket: log, or empty for all." enum:"log," default:""`
 }
 
 type cursorJSON struct {
@@ -47,17 +47,6 @@ func (cmd *CursorsCmd) Run(c *CLI) error {
 		}
 
 		switch bucketName {
-		case "metric":
-			cursors, err := reader.MetricCursors()
-			if err != nil {
-				return err
-			}
-			for _, c := range cursors {
-				entries = append(entries, struct {
-					key string
-					ts  time.Time
-				}{c.Key, c.Timestamp})
-			}
 		case "log":
 			cursors, err := reader.LogCursors()
 			if err != nil {
@@ -104,7 +93,7 @@ func (cmd *CursorsCmd) Run(c *CLI) error {
 		return nil
 	}
 
-	buckets := []string{"metric", "log"}
+	buckets := []string{"log"}
 	if cmd.Bucket != "" {
 		buckets = []string{cmd.Bucket}
 	}

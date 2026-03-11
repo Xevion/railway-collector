@@ -67,11 +67,6 @@ func (r *Reader) Close() error {
 	return r.db.Close()
 }
 
-// MetricCursors returns all entries from the metric_cursors bucket.
-func (r *Reader) MetricCursors() ([]CursorEntry, error) {
-	return r.readCursors(metricCursorBucket)
-}
-
 // LogCursors returns all entries from the log_cursors bucket.
 func (r *Reader) LogCursors() ([]CursorEntry, error) {
 	return r.readCursors(logCursorBucket)
@@ -129,7 +124,6 @@ func (r *Reader) readRaw(bucket []byte) ([]RawEntry, error) {
 // BucketStats returns entry counts for all known buckets.
 func (r *Reader) BucketStats() ([]BucketStat, error) {
 	buckets := [][]byte{
-		metricCursorBucket,
 		logCursorBucket,
 		discoveryCacheBucket,
 		coverageBucket,

@@ -38,17 +38,6 @@ func (r Regime) String() string {
 	}
 }
 
-// DefaultCreditConfig returns the default credit allocation.
-func DefaultCreditConfig() config.CreditsConfig {
-	return config.CreditsConfig{
-		MetricsRate:   8.0, // absorbs most budget (metrics + gap filling)
-		LogsRate:      6.0, // env log gap filling + build/http logs
-		DiscoveryRate: 1.0, // 1/min, mostly unused (TTL cached)
-		UsageRate:     1.0, // low cadence billing snapshots
-		MaxCredits:    4.0,
-	}
-}
-
 // creditPool tracks available credits for a single task type.
 type creditPool struct {
 	tokens    float64

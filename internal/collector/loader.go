@@ -16,12 +16,10 @@ const (
 	BreadthMetrics                    = 12
 	BreadthEnvironmentLogs            = 13
 	BreadthBuildLogs                  = 13
-	BreadthDeploymentLogs             = 13
 	BreadthHttpLogs                   = 21
 	BreadthHttpDurationMetrics        = 5
 	BreadthHttpMetricsGroupedByStatus = 5
 	BreadthReplicaMetrics             = 12 // assumed same as BreadthMetrics; same selection set shape
-	BreadthNetworkFlowServiceLayer    = 11
 	BreadthUsage                      = 12
 	BreadthEstimatedUsage             = 5
 

@@ -23,8 +23,8 @@ const MetricsFieldBody = `{
       }
     }`
 
-// DeploymentLogsFieldBody is the selection set for deployment runtime logs.
-const DeploymentLogsFieldBody = `{
+// BuildLogsFieldBody is the selection set for build logs.
+const BuildLogsFieldBody = `{
       timestamp
       message
       severity
@@ -37,9 +37,6 @@ const DeploymentLogsFieldBody = `{
         environmentId
       }
     }`
-
-// buildLogsFieldBody is the selection set for build logs.
-const BuildLogsFieldBody = DeploymentLogsFieldBody
 
 // HttpLogsFieldBody is the selection set for HTTP access logs.
 const HttpLogsFieldBody = `{
@@ -66,7 +63,7 @@ const HttpLogsFieldBody = `{
     }`
 
 // EnvironmentLogsFieldBody is the selection set for environment logs.
-const EnvironmentLogsFieldBody = DeploymentLogsFieldBody
+const EnvironmentLogsFieldBody = BuildLogsFieldBody
 
 // ReplicaMetricsFieldBody is the selection set for replica metrics.
 const ReplicaMetricsFieldBody = `{

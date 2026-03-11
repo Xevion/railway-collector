@@ -127,7 +127,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -181,7 +181,7 @@ func TestUnifiedScheduler_SkipsWhenNoCredits(t *testing.T) {
 	}
 
 	// Create allocator with exhausted credits.
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 	credits.UpdateRegime(0, 1000, 3600) // exhausted regime, zeroes all rates
 
 	// Drain any initial credit.
@@ -231,7 +231,7 @@ func TestUnifiedScheduler_DiscoverySpecialCase(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -310,7 +310,7 @@ func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,
@@ -348,7 +348,7 @@ func TestUnifiedScheduler_StopCancelsLoop(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:      fakeClock,
@@ -384,7 +384,7 @@ func TestUnifiedScheduler_ContextCancelReturnsError(t *testing.T) {
 
 	api.EXPECT().RateLimitInfo().Return(500, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:      fakeClock,
@@ -446,7 +446,7 @@ func TestUnifiedScheduler_UpdatesRateState(t *testing.T) {
 	// remaining=5 out of estimated 1000 = 0.5% -> Scarce.
 	api.EXPECT().RateLimitInfo().Return(5, time.Now().Add(time.Hour)).AnyTimes()
 
-	credits := collector.NewCreditAllocator(collector.DefaultCreditConfig(), fakeClock.Now(), slog.Default())
+	credits := collector.NewCreditAllocator(testCreditConfig, fakeClock.Now(), slog.Default())
 
 	s := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
 		Clock:        fakeClock,

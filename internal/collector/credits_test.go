@@ -8,12 +8,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/xevion/railway-collector/internal/collector"
+	"github.com/xevion/railway-collector/internal/config"
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+// testCreditConfig is a stable fixture used across credit tests.
+var testCreditConfig = config.CreditsConfig{
+	MetricsRate:   8.0,
+	LogsRate:      6.0,
+	DiscoveryRate: 1.0,
+	UsageRate:     1.0,
+	MaxCredits:    4.0,
+}
+
 func TestCreditPool_DripRate(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
+	cfg := testCreditConfig
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
@@ -27,7 +37,7 @@ func TestCreditPool_DripRate(t *testing.T) {
 }
 
 func TestCreditPool_MaxCap(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
+	cfg := testCreditConfig
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
@@ -38,7 +48,7 @@ func TestCreditPool_MaxCap(t *testing.T) {
 }
 
 func TestCreditAllocator_TryDeduct(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
+	cfg := testCreditConfig
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
@@ -53,7 +63,7 @@ func TestCreditAllocator_TryDeduct(t *testing.T) {
 }
 
 func TestCreditAllocator_RegimeTransitions(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
+	cfg := testCreditConfig
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
@@ -77,7 +87,7 @@ func TestCreditAllocator_RegimeTransitions(t *testing.T) {
 }
 
 func TestCreditAllocator_ScarceReducesDiscovery(t *testing.T) {
-	cfg := collector.DefaultCreditConfig()
+	cfg := testCreditConfig
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
