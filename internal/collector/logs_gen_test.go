@@ -7,12 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
 	"github.com/xevion/railway-collector/internal/collector/types"
-	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/sink"
 	"go.uber.org/mock/gomock"
 )
@@ -25,14 +23,9 @@ func TestLogsGenerator_Type(t *testing.T) {
 }
 
 func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -43,12 +36,12 @@ func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
 	}})
 
 	// All log types use coverage-driven gap filling
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
+		Discovery:       env.Targets,
+		Store:           env.Store,
+		Clock:           env.Clock,
 		Types:           []string{"deployment", "build", "http"},
 		Limit:           500,
 		Interval:        30 * time.Second,
@@ -57,7 +50,7 @@ func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
 		Logger:          slog.Default(),
 	})
 
-	items := gen.Poll(now)
+	items := gen.Poll(env.Now)
 	require.NotEmpty(t, items)
 
 	// Should have env log items, build log items, and HTTP log items
@@ -83,62 +76,37 @@ func TestLogsGenerator_Poll_EmitsAllLogTypes(t *testing.T) {
 }
 
 func TestLogsGenerator_Poll_RespectsInterval(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
-		ProjectID: "proj-1", ServiceID: "svc-1",
-		EnvironmentID: "env-1", DeploymentID: "dep-1",
-	}}).AnyTimes()
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
-
-	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
-		Types:           []string{"deployment"},
-		Limit:           500,
-		Interval:        30 * time.Second,
-		LogRetention:    1 * time.Hour,
-		MaxItemsPerPoll: 10,
-		Logger:          slog.Default(),
+	testRespectsInterval(t, 30*time.Second, func(env *genTestEnv) types.TaskGenerator {
+		return collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+			Discovery:       env.Targets,
+			Store:           env.Store,
+			Clock:           env.Clock,
+			Types:           []string{"deployment"},
+			Limit:           500,
+			Interval:        30 * time.Second,
+			LogRetention:    1 * time.Hour,
+			MaxItemsPerPoll: 10,
+			Logger:          slog.Default(),
+		})
 	})
-
-	items := gen.Poll(now)
-	require.NotEmpty(t, items)
-
-	// Immediate second poll returns nil
-	items = gen.Poll(now.Add(1 * time.Second))
-	assert.Nil(t, items)
-
-	// After interval, returns items
-	items = gen.Poll(now.Add(30 * time.Second))
-	require.NotEmpty(t, items)
 }
 
 func TestLogsGenerator_Poll_DeduplicatesEnvironments(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
 	// Two services in the same environment
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"},
 		{ProjectID: "proj-1", ServiceID: "svc-2", EnvironmentID: "env-1", DeploymentID: "dep-2"},
 	})
 
 	// Coverage-driven: only one coverage check per environment (deduplicated)
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
+		Discovery:       env.Targets,
+		Store:           env.Store,
+		Clock:           env.Clock,
 		Types:           []string{"deployment"},
 		Limit:           500,
 		Interval:        30 * time.Second,
@@ -147,7 +115,7 @@ func TestLogsGenerator_Poll_DeduplicatesEnvironments(t *testing.T) {
 		Logger:          slog.Default(),
 	})
 
-	items := gen.Poll(fakeClock.Now())
+	items := gen.Poll(env.Now)
 	// Should have env log items for env-1 only (deduplicated)
 	envLogItems := 0
 	for _, item := range items {
@@ -160,151 +128,52 @@ func TestLogsGenerator_Poll_DeduplicatesEnvironments(t *testing.T) {
 }
 
 func TestLogsGenerator_Poll_SkipsNoDeployment(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
 	// Target without deployment ID
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: ""},
 	})
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery: targets,
-		Store:     store,
-		Clock:     fakeClock,
+		Discovery: env.Targets,
+		Store:     env.Store,
+		Clock:     env.Clock,
 		Types:     []string{"build", "http"}, // no "deployment" type
 		Limit:     500,
 		Interval:  30 * time.Second,
 		Logger:    slog.Default(),
 	})
 
-	items := gen.Poll(fakeClock.Now())
+	items := gen.Poll(env.Now)
 	// No build/HTTP items because deployment ID is empty
 	assert.Nil(t, items)
 }
 
 func TestLogsGenerator_Poll_GapChunking(t *testing.T) {
-	// Tests that large live-edge gaps in environment log coverage are chunked
-	// rather than emitted as a single work item.
-	tests := []struct {
-		name            string
-		retention       time.Duration
-		chunkSize       time.Duration
-		maxItems        int
-		wantMinItems    int
-		wantMaxOpenEnd  int // max items without beforeDate
-		wantMinChunked  int // min items with beforeDate
-		wantTotalCapped bool
-	}{
-		{
-			name:           "7d live-edge gap with 6h chunks",
-			retention:      7 * 24 * time.Hour,
-			chunkSize:      6 * time.Hour,
-			maxItems:       200,
-			wantMinItems:   2,
-			wantMaxOpenEnd: 1,
-			wantMinChunked: 1,
-		},
-		{
-			name:           "90d live-edge gap with 6h chunks",
-			retention:      90 * 24 * time.Hour,
-			chunkSize:      6 * time.Hour,
-			maxItems:       500,
-			wantMinItems:   2,
-			wantMaxOpenEnd: 1,
-			wantMinChunked: 10,
-		},
-		{
-			name:           "gap smaller than chunk size stays single item",
-			retention:      1 * time.Hour,
-			chunkSize:      6 * time.Hour,
-			maxItems:       50,
-			wantMinItems:   1,
-			wantMaxOpenEnd: 1,
-			wantMinChunked: 0,
-		},
-		{
-			name:            "maxItems caps output",
-			retention:       7 * 24 * time.Hour,
-			chunkSize:       6 * time.Hour,
-			maxItems:        5,
-			wantMinItems:    5,
-			wantMaxOpenEnd:  1,
-			wantMinChunked:  1,
-			wantTotalCapped: true,
-		},
-		{
-			name:           "1h chunks on 2d gap produces many items",
-			retention:      2 * 24 * time.Hour,
-			chunkSize:      1 * time.Hour,
-			maxItems:       200,
-			wantMinItems:   2,
-			wantMaxOpenEnd: 1,
-			wantMinChunked: 10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			store := mocks.NewMockStateStore(ctrl)
-			targets := mocks.NewMockTargetProvider(ctrl)
-			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-			now := fakeClock.Now()
-
-			targets.EXPECT().Targets().Return([]types.ServiceTarget{
-				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
-			})
-			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
-
-			gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-				Discovery:       targets,
-				Store:           store,
-				Clock:           fakeClock,
-				Types:           []string{"deployment"},
-				Limit:           500,
-				Interval:        30 * time.Second,
-				LogRetention:    tt.retention,
-				ChunkSize:       tt.chunkSize,
-				MaxItemsPerPoll: tt.maxItems,
-				Logger:          slog.Default(),
-			})
-
-			items := gen.Poll(now)
-			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
-
-			// Logs use beforeDate (not endDate) for chunked items
-			var chunked, openEnded int
-			for _, item := range items {
-				if _, hasEnd := item.Params["beforeDate"]; hasEnd {
-					chunked++
-				} else {
-					openEnded++
-				}
-			}
-
-			assert.LessOrEqual(t, openEnded, tt.wantMaxOpenEnd, "open-ended item count")
-			assert.GreaterOrEqual(t, chunked, tt.wantMinChunked, "chunked item count")
-
-			if tt.wantTotalCapped {
-				assert.Equal(t, tt.maxItems, len(items), "output should be capped at maxItems")
-			}
+	runGapChunkTests(t, commonGapChunkCases(), "beforeDate", func(env *genTestEnv, retention, chunkSize time.Duration, maxItems int) types.TaskGenerator {
+		return collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+			Discovery:       env.Targets,
+			Store:           env.Store,
+			Clock:           env.Clock,
+			Types:           []string{"deployment"},
+			Limit:           500,
+			Interval:        30 * time.Second,
+			LogRetention:    retention,
+			ChunkSize:       chunkSize,
+			MaxItemsPerPoll: maxItems,
+			Logger:          slog.Default(),
 		})
-	}
+	})
 }
 
 func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
-	afterDate := fakeClock.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	afterDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -315,8 +184,8 @@ func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 	}})
 
 	// Coverage recording (no cursor update)
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
-	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
 	var collected []sink.LogEntry
 	fakeSink := &recordingSink{
@@ -327,10 +196,10 @@ func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 	}
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery: targets,
-		Store:     store,
+		Discovery: env.Targets,
+		Store:     env.Store,
 		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
+		Clock:     env.Clock,
 		Types:     []string{"deployment"},
 		Limit:     500,
 		Interval:  30 * time.Second,
@@ -372,24 +241,21 @@ func TestLogsGenerator_Deliver_EnvironmentLogs(t *testing.T) {
 }
 
 func TestLogsGenerator_Deliver_BuildLogs(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID: "proj-1", ProjectName: "test-project",
 		ServiceID: "svc-1", ServiceName: "test-service",
 		EnvironmentID: "env-1", EnvironmentName: "production",
 		DeploymentID: "dep-1",
 	}})
 
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
-	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
-	startDate := fakeClock.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	startDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
 
 	var collected []sink.LogEntry
 	fakeSink := &recordingSink{
@@ -400,10 +266,10 @@ func TestLogsGenerator_Deliver_BuildLogs(t *testing.T) {
 	}
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery: targets,
-		Store:     store,
+		Discovery: env.Targets,
+		Store:     env.Store,
 		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
+		Clock:     env.Clock,
 		Types:     []string{"build"},
 		Limit:     500,
 		Interval:  30 * time.Second,
@@ -438,23 +304,20 @@ func TestLogsGenerator_Deliver_BuildLogs(t *testing.T) {
 }
 
 func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	ts := fakeClock.Now().Add(-1 * time.Minute).Format(time.RFC3339Nano)
-	startDate := fakeClock.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	ts := env.Now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	startDate := env.Now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID: "proj-1", ProjectName: "test-project",
 		ServiceID: "svc-1", ServiceName: "test-service",
 		EnvironmentID: "env-1", EnvironmentName: "production",
 		DeploymentID: "dep-1",
 	}})
 
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
-	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
 	var collected []sink.LogEntry
 	fakeSink := &recordingSink{
@@ -465,10 +328,10 @@ func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
 	}
 
 	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery: targets,
-		Store:     store,
+		Discovery: env.Targets,
+		Store:     env.Store,
 		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
+		Clock:     env.Clock,
 		Types:     []string{"http"},
 		Limit:     500,
 		Interval:  30 * time.Second,
@@ -515,26 +378,15 @@ func TestLogsGenerator_Deliver_HttpLogs(t *testing.T) {
 }
 
 func TestLogsGenerator_Deliver_HandlesError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	fakeSink := &recordingSink{}
-
-	gen := collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-		Discovery: targets,
-		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
-		Types:     []string{"deployment"},
-		Interval:  30 * time.Second,
-		Logger:    slog.Default(),
-	})
-
-	item := types.WorkItem{
-		ID: "envlogs:env-1", Kind: types.QueryEnvironmentLogs,
-		AliasKey: "env-1",
-	}
-
-	// Should not panic
-	gen.Deliver(context.Background(), item, nil, assert.AnError)
+	testDeliverHandlesError(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentID: "dep-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewLogsGenerator(collector.LogsGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Types: []string{"deployment"},
+				Interval: 30 * time.Second, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{ID: "envlogs:env-1", Kind: types.QueryEnvironmentLogs, AliasKey: "env-1"},
+	)
 }

@@ -149,80 +149,51 @@ func TestCoverage_GapCounting_WithEmptyIntervals(t *testing.T) {
 	assert.Equal(t, 1, s.GapCount, "should find 1 gap after the empty interval")
 }
 
-func TestCoverage_LargestGap_NoGaps(t *testing.T) {
-	// Full coverage, no gaps at all -> LargestGap should be 0, not missing/nil
+func TestCoverage_LargestGap(t *testing.T) {
 	windowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
 
-	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
-			{
-				Start: windowStart,
-				End:   windowEnd,
-				Kind:  coverage.CoverageCollected,
+	tests := []struct {
+		name        string
+		intervals   []coverage.CoverageInterval
+		wantCount   int
+		wantLargest time.Duration
+		wantTotal   time.Duration
+	}{
+		{
+			name: "no gaps - full coverage",
+			intervals: []coverage.CoverageInterval{
+				{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 			},
-		}),
+			wantCount: 0, wantLargest: 0, wantTotal: 0,
+		},
+		{
+			name: "with gaps - largest is 20min",
+			intervals: []coverage.CoverageInterval{
+				{Start: time.Date(2025, 1, 1, 0, 10, 0, 0, time.UTC), End: time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC), Kind: coverage.CoverageCollected},
+				{Start: time.Date(2025, 1, 1, 0, 40, 0, 0, time.UTC), End: time.Date(2025, 1, 1, 0, 50, 0, 0, time.UTC), Kind: coverage.CoverageCollected},
+			},
+			wantCount: 3, wantLargest: 20 * time.Minute, wantTotal: 40 * time.Minute,
+		},
+		{
+			name:      "no coverage - entire window is gap",
+			intervals: []coverage.CoverageInterval{},
+			wantCount: 1, wantLargest: time.Hour, wantTotal: time.Hour,
+		},
 	}
 
-	noopResolver := func(id string) string { return id }
-	summaries := buildCoverageSummaries(entries, windowStart, windowEnd, noopResolver)
-
-	require.Len(t, summaries, 1)
-	s := summaries[0]
-
-	assert.Equal(t, 0, s.GapCount, "no gaps expected")
-	assert.Equal(t, time.Duration(0), s.LargestGap, "largest gap should be 0s, not unset")
-	assert.Equal(t, time.Duration(0), s.Gaps, "total gap duration should be 0")
-}
-
-func TestCoverage_LargestGap_WithGaps(t *testing.T) {
-	// Window: 00:00 to 01:00
-	// Intervals: 00:10-00:20, 00:40-00:50
-	// Gaps: 00:00-00:10 (10 min), 00:20-00:40 (20 min), 00:50-01:00 (10 min)
-	// Largest gap = 20 min
-	windowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
-
-	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{
-			{
-				Start: time.Date(2025, 1, 1, 0, 10, 0, 0, time.UTC),
-				End:   time.Date(2025, 1, 1, 0, 20, 0, 0, time.UTC),
-				Kind:  coverage.CoverageCollected,
-			},
-			{
-				Start: time.Date(2025, 1, 1, 0, 40, 0, 0, time.UTC),
-				End:   time.Date(2025, 1, 1, 0, 50, 0, 0, time.UTC),
-				Kind:  coverage.CoverageCollected,
-			},
-		}),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []state.RawEntry{makeEntry(t, "proj-1:metric", tt.intervals)}
+			noopResolver := func(id string) string { return id }
+			summaries := buildCoverageSummaries(entries, windowStart, windowEnd, noopResolver)
+			require.Len(t, summaries, 1)
+			s := summaries[0]
+			assert.Equal(t, tt.wantCount, s.GapCount)
+			assert.Equal(t, tt.wantLargest, s.LargestGap)
+			assert.Equal(t, tt.wantTotal, s.Gaps)
+		})
 	}
-
-	noopResolver := func(id string) string { return id }
-	summaries := buildCoverageSummaries(entries, windowStart, windowEnd, noopResolver)
-
-	require.Len(t, summaries, 1)
-	assert.Equal(t, 20*time.Minute, summaries[0].LargestGap, "largest gap should be 20 minutes")
-}
-
-func TestCoverage_LargestGap_NoCoverage(t *testing.T) {
-	// No intervals at all -> entire window is one gap
-	windowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	windowEnd := time.Date(2025, 1, 1, 1, 0, 0, 0, time.UTC)
-
-	entries := []state.RawEntry{
-		makeEntry(t, "proj-1:metric", []coverage.CoverageInterval{}),
-	}
-
-	noopResolver := func(id string) string { return id }
-	summaries := buildCoverageSummaries(entries, windowStart, windowEnd, noopResolver)
-
-	require.Len(t, summaries, 1)
-	s := summaries[0]
-
-	assert.Equal(t, 1, s.GapCount, "entire window should be 1 gap")
-	assert.Equal(t, time.Hour, s.LargestGap, "largest gap should equal the full window (1h)")
-	assert.Equal(t, time.Hour, s.Gaps, "total gap should equal the full window (1h)")
 }
 
 func TestCoverage_KeyResolution(t *testing.T) {

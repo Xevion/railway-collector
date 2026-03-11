@@ -27,18 +27,30 @@ func setupTestDB(t *testing.T) string {
 	return path
 }
 
-func TestReader_OpenReadOnly(t *testing.T) {
+func openTestReader(t *testing.T) *state.Reader {
+	t.Helper()
 	path := setupTestDB(t)
 	reader, err := state.OpenReadOnly(path)
 	require.NoError(t, err)
-	defer reader.Close()
+	t.Cleanup(func() { reader.Close() })
+	return reader
+}
+
+func openTestWriter(t *testing.T) *state.Writer {
+	t.Helper()
+	path := setupTestDB(t)
+	writer, err := state.OpenReadWrite(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { writer.Close() })
+	return writer
+}
+
+func TestReader_OpenReadOnly(t *testing.T) {
+	_ = openTestReader(t)
 }
 
 func TestReader_LogCursors(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadOnly(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	reader := openTestReader(t)
 
 	cursors, err := reader.LogCursors()
 	require.NoError(t, err)
@@ -46,10 +58,7 @@ func TestReader_LogCursors(t *testing.T) {
 }
 
 func TestReader_DiscoveryEntries(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadOnly(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	reader := openTestReader(t)
 
 	entries, err := reader.DiscoveryEntries()
 	require.NoError(t, err)
@@ -59,10 +68,7 @@ func TestReader_DiscoveryEntries(t *testing.T) {
 }
 
 func TestReader_CoverageEntries(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadOnly(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	reader := openTestReader(t)
 
 	entries, err := reader.CoverageEntries()
 	require.NoError(t, err)
@@ -71,10 +77,7 @@ func TestReader_CoverageEntries(t *testing.T) {
 }
 
 func TestReader_BucketStats(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadOnly(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	reader := openTestReader(t)
 
 	stats, err := reader.BucketStats()
 	require.NoError(t, err)
@@ -90,10 +93,7 @@ func TestReader_BucketStats(t *testing.T) {
 }
 
 func TestReader_DBFileSize(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadOnly(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	reader := openTestReader(t)
 
 	size, err := reader.DBFileSize()
 	require.NoError(t, err)
@@ -101,42 +101,33 @@ func TestReader_DBFileSize(t *testing.T) {
 }
 
 func TestReader_DeleteBucket(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadWrite(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	writer := openTestWriter(t)
 
-	count, err := reader.DeleteBucket("discovery_cache")
+	count, err := writer.DeleteBucket("discovery_cache")
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
 	// Verify empty
-	entries, err := reader.DiscoveryEntries()
+	entries, err := writer.DiscoveryEntries()
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
 
 func TestReader_DeleteKey(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadWrite(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	writer := openTestWriter(t)
 
-	err = reader.DeleteKey("discovery_cache", "proj-aaa")
+	err := writer.DeleteKey("discovery_cache", "proj-aaa")
 	require.NoError(t, err)
 
-	entries, err := reader.DiscoveryEntries()
+	entries, err := writer.DiscoveryEntries()
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
 
 func TestReader_DeleteKey_NotFound(t *testing.T) {
-	path := setupTestDB(t)
-	reader, err := state.OpenReadWrite(path)
-	require.NoError(t, err)
-	defer reader.Close()
+	writer := openTestWriter(t)
 
-	err = reader.DeleteKey("log_cursors", "nonexistent")
+	err := writer.DeleteKey("log_cursors", "nonexistent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }

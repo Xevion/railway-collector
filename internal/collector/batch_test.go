@@ -232,27 +232,8 @@ func TestSortByPriority(t *testing.T) {
 	assert.Equal(t, types.TaskTypeDiscovery, fragments[2].Item.TaskType)
 }
 
-// fakeGenerator implements TaskGenerator for testing result dispatch.
-type fakeGenerator struct {
-	deliveries []fakeDelivery
-	taskType   types.TaskType
-}
-
-type fakeDelivery struct {
-	item types.WorkItem
-	data json.RawMessage
-	err  error
-}
-
-func (g *fakeGenerator) Poll(_ time.Time) []types.WorkItem { return nil }
-func (g *fakeGenerator) Type() types.TaskType              { return g.taskType }
-func (g *fakeGenerator) NextPoll() time.Time               { return time.Time{} }
-func (g *fakeGenerator) Deliver(_ context.Context, item types.WorkItem, data json.RawMessage, err error) {
-	g.deliveries = append(g.deliveries, fakeDelivery{item: item, data: data, err: err})
-}
-
 func TestDispatchRequestResults_Success(t *testing.T) {
-	gen := &fakeGenerator{taskType: types.TaskTypeMetrics}
+	gen := &stubGenerator{taskType: types.TaskTypeMetrics}
 	alias := railway.SanitizeAlias("proj-a")
 
 	item := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
@@ -271,13 +252,14 @@ func TestDispatchRequestResults_Success(t *testing.T) {
 	generatorMap := map[string]types.TaskGenerator{"m1": gen}
 	loader.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
-	require.Len(t, gen.deliveries, 1)
-	assert.Nil(t, gen.deliveries[0].err)
-	assert.Contains(t, string(gen.deliveries[0].data), "CPU_USAGE")
+	d := gen.getDeliveries()
+	require.Len(t, d, 1)
+	assert.Nil(t, d[0].Err)
+	assert.Contains(t, string(d[0].Data), "CPU_USAGE")
 }
 
 func TestDispatchRequestResults_QueryError(t *testing.T) {
-	gen := &fakeGenerator{taskType: types.TaskTypeMetrics}
+	gen := &stubGenerator{taskType: types.TaskTypeMetrics}
 	item1 := types.WorkItem{ID: "m1", Kind: types.QueryMetrics, AliasKey: "proj-a"}
 	item2 := types.WorkItem{ID: "m2", Kind: types.QueryMetrics, AliasKey: "proj-b"}
 
@@ -291,13 +273,14 @@ func TestDispatchRequestResults_QueryError(t *testing.T) {
 	generatorMap := map[string]types.TaskGenerator{"m1": gen, "m2": gen}
 	loader.DispatchRequestResults(context.Background(), req, nil, assert.AnError, generatorMap)
 
-	require.Len(t, gen.deliveries, 2)
-	assert.ErrorIs(t, gen.deliveries[0].err, assert.AnError)
-	assert.ErrorIs(t, gen.deliveries[1].err, assert.AnError)
+	d := gen.getDeliveries()
+	require.Len(t, d, 2)
+	assert.ErrorIs(t, d[0].Err, assert.AnError)
+	assert.ErrorIs(t, d[1].Err, assert.AnError)
 }
 
 func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
-	gen := &fakeGenerator{taskType: types.TaskTypeLogs}
+	gen := &stubGenerator{taskType: types.TaskTypeLogs}
 	depAlias := railway.SanitizeAlias("dep-123") + "_build"
 
 	item := types.WorkItem{ID: "b1", Kind: types.QueryBuildLogs, AliasKey: "dep-123"}
@@ -316,153 +299,174 @@ func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
 	generatorMap := map[string]types.TaskGenerator{"b1": gen}
 	loader.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
-	require.Len(t, gen.deliveries, 1)
-	assert.Nil(t, gen.deliveries[0].err)
+	d := gen.getDeliveries()
+	require.Len(t, d, 1)
+	assert.Nil(t, d[0].Err)
 }
 
-func TestFragmentFromWorkItem_ServiceMetrics(t *testing.T) {
-	item := types.WorkItem{
-		ID: "svc-metrics:svc-1:env-1", Kind: types.QueryServiceMetrics,
-		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
-		Params: map[string]any{
-			"serviceId":              "svc-1",
-			"environmentId":          "env-1",
-			"startDate":              "2025-01-01T00:00:00Z",
-			"endDate":                "2025-01-01T06:00:00Z",
-			"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-			"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-			"sampleRateSeconds":      30,
-			"averagingWindowSeconds": 60,
+func TestFragmentFromWorkItem_ByKind(t *testing.T) {
+	tests := []struct {
+		name          string
+		item          types.WorkItem
+		wantSuffix    string
+		wantField     string
+		wantBreadth   int
+		wantArgs      []string // substrings expected in f.Args
+		wantVarValues map[string]any
+	}{
+		{
+			name: "ServiceMetrics",
+			item: types.WorkItem{
+				ID: "svc-metrics:svc-1:env-1", Kind: types.QueryServiceMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+				Params: map[string]any{
+					"serviceId":              "svc-1",
+					"environmentId":          "env-1",
+					"startDate":              "2025-01-01T00:00:00Z",
+					"endDate":                "2025-01-01T06:00:00Z",
+					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
+					"sampleRateSeconds":      30,
+					"averagingWindowSeconds": 60,
+				},
+			},
+			wantSuffix:  "_svcmetrics",
+			wantField:   "metrics",
+			wantBreadth: loader.BreadthMetrics,
+			wantArgs: []string{
+				`serviceId: "svc-1"`,
+				`environmentId: "env-1"`,
+			},
+			wantVarValues: map[string]any{
+				"startDate": "2025-01-01T00:00:00Z",
+				"endDate":   "2025-01-01T06:00:00Z",
+			},
+		},
+		{
+			name: "ReplicaMetrics",
+			item: types.WorkItem{
+				ID: "replica-metrics:svc-1:env-1", Kind: types.QueryReplicaMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+				Params: map[string]any{
+					"serviceId":              "svc-1",
+					"environmentId":          "env-1",
+					"startDate":              "2025-01-01T00:00:00Z",
+					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+					"sampleRateSeconds":      30,
+					"averagingWindowSeconds": 60,
+				},
+			},
+			wantSuffix:  "_replica",
+			wantField:   "replicaMetrics",
+			wantBreadth: loader.BreadthReplicaMetrics,
+			wantArgs: []string{
+				`serviceId: "svc-1"`,
+				`environmentId: "env-1"`,
+			},
+			wantVarValues: map[string]any{
+				"startDate": "2025-01-01T00:00:00Z",
+			},
+		},
+		{
+			name: "HttpDurationMetrics",
+			item: types.WorkItem{
+				ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics,
+				TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+				Params: map[string]any{
+					"serviceId":     "svc-1",
+					"environmentId": "env-1",
+					"startDate":     "2025-01-01T00:00:00Z",
+					"endDate":       "2025-01-01T06:00:00Z",
+					"stepSeconds":   60,
+				},
+			},
+			wantSuffix:  "_httpdur",
+			wantField:   "httpDurationMetrics",
+			wantBreadth: loader.BreadthHttpDurationMetrics,
+			wantArgs: []string{
+				`serviceId: "svc-1"`,
+				`environmentId: "env-1"`,
+			},
+			wantVarValues: map[string]any{
+				"startDate":   "2025-01-01T00:00:00Z",
+				"endDate":     "2025-01-01T06:00:00Z",
+				"stepSeconds": 60,
+			},
+		},
+		{
+			name: "HttpMetricsGroupedByStatus",
+			item: types.WorkItem{
+				ID: "http-status:svc-1:env-1", Kind: types.QueryHttpMetricsGroupedByStatus,
+				TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
+				Params: map[string]any{
+					"serviceId":     "svc-1",
+					"environmentId": "env-1",
+					"startDate":     "2025-01-01T00:00:00Z",
+					"endDate":       "2025-01-01T06:00:00Z",
+					"stepSeconds":   60,
+				},
+			},
+			wantSuffix:  "_httpstatus",
+			wantField:   "httpMetricsGroupedByStatus",
+			wantBreadth: loader.BreadthHttpMetricsGroupedByStatus,
+			wantArgs: []string{
+				`serviceId: "svc-1"`,
+				`environmentId: "env-1"`,
+			},
+			wantVarValues: map[string]any{
+				"startDate":   "2025-01-01T00:00:00Z",
+				"endDate":     "2025-01-01T06:00:00Z",
+				"stepSeconds": 60,
+			},
+		},
+		{
+			name: "Usage",
+			item: types.WorkItem{
+				ID: "usage:proj-1", Kind: types.QueryUsage,
+				TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
+				Params: map[string]any{
+					"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+					"groupBy":      []railway.MetricTag{railway.MetricTagProjectId},
+				},
+			},
+			wantSuffix:  "_usage",
+			wantField:   "usage",
+			wantBreadth: loader.BreadthUsage,
+			wantArgs: []string{
+				`projectId: "proj-1"`,
+			},
+		},
+		{
+			name: "EstimatedUsage",
+			item: types.WorkItem{
+				ID: "estimated-usage:proj-1", Kind: types.QueryEstimatedUsage,
+				TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
+				Params: map[string]any{
+					"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+				},
+			},
+			wantSuffix:  "_estusage",
+			wantField:   "estimatedUsage",
+			wantBreadth: loader.BreadthEstimatedUsage,
+			wantArgs: []string{
+				`projectId: "proj-1"`,
+			},
 		},
 	}
 
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_svcmetrics"), "alias should end with _svcmetrics, got %s", f.Alias)
-	assert.Equal(t, "metrics", f.Field)
-	assert.Equal(t, loader.BreadthMetrics, f.Breadth)
-
-	// serviceId and environmentId are literals (not variables)
-	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
-	assert.Contains(t, f.Args, `environmentId: "env-1"`)
-
-	// Variable namespacing: all vars should use the full alias suffix
-	assert.Contains(t, f.Args, "startDate: $startDate_"+f.Alias)
-	assert.Contains(t, f.Args, "endDate: $endDate_"+f.Alias)
-	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["startDate_"+f.Alias])
-	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["endDate_"+f.Alias])
-}
-
-func TestFragmentFromWorkItem_ReplicaMetrics(t *testing.T) {
-	item := types.WorkItem{
-		ID: "replica-metrics:svc-1:env-1", Kind: types.QueryReplicaMetrics,
-		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
-		Params: map[string]any{
-			"serviceId":              "svc-1",
-			"environmentId":          "env-1",
-			"startDate":              "2025-01-01T00:00:00Z",
-			"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-			"sampleRateSeconds":      30,
-			"averagingWindowSeconds": 60,
-		},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := collector.FragmentFromWorkItem(tt.item, time.Now())
+			assert.True(t, strings.HasSuffix(f.Alias, tt.wantSuffix), "alias %s should end with %s", f.Alias, tt.wantSuffix)
+			assert.Equal(t, tt.wantField, f.Field)
+			assert.Equal(t, tt.wantBreadth, f.Breadth)
+			for _, arg := range tt.wantArgs {
+				assert.Contains(t, f.Args, arg)
+			}
+			for key, want := range tt.wantVarValues {
+				fullKey := key + "_" + f.Alias
+				assert.Equal(t, want, f.VarValues[fullKey], "VarValues[%s]", fullKey)
+			}
+		})
 	}
-
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_replica"), "alias should end with _replica, got %s", f.Alias)
-	assert.Equal(t, "replicaMetrics", f.Field)
-	assert.Equal(t, loader.BreadthReplicaMetrics, f.Breadth)
-
-	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
-	assert.Contains(t, f.Args, `environmentId: "env-1"`)
-	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["startDate_"+f.Alias])
-}
-
-func TestFragmentFromWorkItem_HttpDurationMetrics(t *testing.T) {
-	item := types.WorkItem{
-		ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics,
-		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
-		Params: map[string]any{
-			"serviceId":     "svc-1",
-			"environmentId": "env-1",
-			"startDate":     "2025-01-01T00:00:00Z",
-			"endDate":       "2025-01-01T06:00:00Z",
-			"stepSeconds":   60,
-		},
-	}
-
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_httpdur"), "alias should end with _httpdur, got %s", f.Alias)
-	assert.Equal(t, "httpDurationMetrics", f.Field)
-	assert.Equal(t, loader.BreadthHttpDurationMetrics, f.Breadth)
-
-	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
-	assert.Contains(t, f.Args, `environmentId: "env-1"`)
-	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["startDate_"+f.Alias])
-	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["endDate_"+f.Alias])
-	assert.Equal(t, 60, f.VarValues["stepSeconds_"+f.Alias])
-}
-
-func TestFragmentFromWorkItem_HttpMetricsGroupedByStatus(t *testing.T) {
-	item := types.WorkItem{
-		ID: "http-status:svc-1:env-1", Kind: types.QueryHttpMetricsGroupedByStatus,
-		TaskType: types.TaskTypeMetrics, AliasKey: "svc-1:env-1",
-		Params: map[string]any{
-			"serviceId":     "svc-1",
-			"environmentId": "env-1",
-			"startDate":     "2025-01-01T00:00:00Z",
-			"endDate":       "2025-01-01T06:00:00Z",
-			"stepSeconds":   60,
-		},
-	}
-
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_httpstatus"), "alias should end with _httpstatus, got %s", f.Alias)
-	assert.Equal(t, "httpMetricsGroupedByStatus", f.Field)
-	assert.Equal(t, loader.BreadthHttpMetricsGroupedByStatus, f.Breadth)
-
-	assert.Contains(t, f.Args, `serviceId: "svc-1"`)
-	assert.Contains(t, f.Args, `environmentId: "env-1"`)
-	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["startDate_"+f.Alias])
-	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["endDate_"+f.Alias])
-	assert.Equal(t, 60, f.VarValues["stepSeconds_"+f.Alias])
-}
-
-func TestFragmentFromWorkItem_Usage(t *testing.T) {
-	item := types.WorkItem{
-		ID: "usage:proj-1", Kind: types.QueryUsage,
-		TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
-		Params: map[string]any{
-			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-			"groupBy":      []railway.MetricTag{railway.MetricTagProjectId},
-		},
-	}
-
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_usage"), "alias should end with _usage, got %s", f.Alias)
-	assert.Equal(t, "usage", f.Field)
-	assert.Equal(t, loader.BreadthUsage, f.Breadth)
-
-	assert.Contains(t, f.Args, `projectId: "proj-1"`)
-}
-
-func TestFragmentFromWorkItem_EstimatedUsage(t *testing.T) {
-	item := types.WorkItem{
-		ID: "estimated-usage:proj-1", Kind: types.QueryEstimatedUsage,
-		TaskType: types.TaskTypeUsage, AliasKey: "proj-1",
-		Params: map[string]any{
-			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		},
-	}
-
-	f := collector.FragmentFromWorkItem(item, time.Now())
-
-	assert.True(t, strings.HasSuffix(f.Alias, "_estusage"), "alias should end with _estusage, got %s", f.Alias)
-	assert.Equal(t, "estimatedUsage", f.Field)
-	assert.Equal(t, loader.BreadthEstimatedUsage, f.Breadth)
-
-	assert.Contains(t, f.Args, `projectId: "proj-1"`)
 }

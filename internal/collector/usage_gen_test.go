@@ -7,15 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
 	"github.com/xevion/railway-collector/internal/collector/types"
-	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
-	"go.uber.org/mock/gomock"
 )
 
 func TestUsageGenerator_Type(t *testing.T) {
@@ -26,26 +23,22 @@ func TestUsageGenerator_Type(t *testing.T) {
 }
 
 func TestUsageGenerator_Poll_EmitsTwoItemsPerProject(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		{ProjectID: "proj-2", ProjectName: "two", ServiceID: "svc-2", EnvironmentID: "env-2"},
 	})
 
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery:    targets,
-		Clock:        fakeClock,
+		Discovery:    env.Targets,
+		Clock:        env.Clock,
 		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		Interval:     1 * time.Hour,
 		Logger:       slog.Default(),
 	})
 
-	items := gen.Poll(now)
+	items := gen.Poll(env.Now)
 	require.NotEmpty(t, items)
 
 	// Should have both QueryUsage and QueryEstimatedUsage for each project
@@ -73,43 +66,37 @@ func TestUsageGenerator_Poll_EmitsTwoItemsPerProject(t *testing.T) {
 }
 
 func TestUsageGenerator_Poll_DefaultInterval(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
 
 	// Use default interval (should be 1 hour)
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery:    targets,
-		Clock:        fakeClock,
+		Discovery:    env.Targets,
+		Clock:        env.Clock,
 		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		Logger:       slog.Default(),
 	})
 
 	// First poll returns items
-	items := gen.Poll(now)
+	items := gen.Poll(env.Now)
 	require.NotEmpty(t, items)
 
 	// Poll 30 minutes later should return nil (default 1-hour interval not elapsed)
-	items = gen.Poll(now.Add(30 * time.Minute))
+	items = gen.Poll(env.Now.Add(30 * time.Minute))
 	assert.Nil(t, items)
 
 	// Poll 1 hour later should return items
-	items = gen.Poll(now.Add(1 * time.Hour))
+	items = gen.Poll(env.Now.Add(1 * time.Hour))
 	require.NotEmpty(t, items)
 }
 
 func TestUsageGenerator_Deliver_Usage(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -127,9 +114,9 @@ func TestUsageGenerator_Deliver_Usage(t *testing.T) {
 	}
 
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery:    targets,
+		Discovery:    env.Targets,
 		Sinks:        []sink.Sink{fakeSink},
-		Clock:        fakeClock,
+		Clock:        env.Clock,
 		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		Logger:       slog.Default(),
 	})
@@ -164,11 +151,9 @@ func TestUsageGenerator_Deliver_Usage(t *testing.T) {
 }
 
 func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:   "proj-1",
 		ProjectName: "test-project",
 		ServiceID:   "svc-1",
@@ -183,9 +168,9 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 	}
 
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery:    targets,
+		Discovery:    env.Targets,
 		Sinks:        []sink.Sink{fakeSink},
-		Clock:        fakeClock,
+		Clock:        env.Clock,
 		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		Logger:       slog.Default(),
 	})
@@ -217,45 +202,29 @@ func TestUsageGenerator_Deliver_EstimatedUsage(t *testing.T) {
 }
 
 func TestUsageGenerator_Deliver_HandlesError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
-		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
-	})
-
-	fakeSink := &recordingSink{}
-
-	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery: targets,
-		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
-		Logger:    slog.Default(),
-	})
-
-	item := types.WorkItem{
-		ID:       "usage:proj-1",
-		Kind:     types.QueryUsage,
-		AliasKey: "proj-1",
-	}
-
-	gen.Deliver(context.Background(), item, nil, assert.AnError)
+	testDeliverHandlesError(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewUsageGenerator(collector.UsageGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{ID: "usage:proj-1", Kind: types.QueryUsage, AliasKey: "proj-1"},
+	)
 }
 
 func TestUsageGenerator_Deliver_EmptyResults(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "test", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
 
 	gen := collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-		Discovery: targets,
+		Discovery: env.Targets,
 		Sinks:     []sink.Sink{&recordingSink{}},
-		Clock:     fakeClock,
+		Clock:     env.Clock,
 		Logger:    slog.Default(),
 	})
 

@@ -7,12 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xevion/railway-collector/internal/collector"
 	"github.com/xevion/railway-collector/internal/collector/types"
-	"github.com/xevion/railway-collector/internal/collector/mocks"
 	"github.com/xevion/railway-collector/internal/sink"
 	"go.uber.org/mock/gomock"
 )
@@ -25,23 +23,18 @@ func TestHttpMetricsGenerator_Type(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 	})
 
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
+		Discovery:       env.Targets,
+		Store:           env.Store,
+		Clock:           env.Clock,
 		Interval:        30 * time.Second,
 		MetricRetention: 1 * time.Hour,
 		ChunkSize:       6 * time.Hour,
@@ -50,7 +43,7 @@ func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
 		Logger:          slog.Default(),
 	})
 
-	items := gen.Poll(now)
+	items := gen.Poll(env.Now)
 	require.NotEmpty(t, items)
 
 	// Should have both QueryHttpDurationMetrics and QueryHttpMetricsGroupedByStatus
@@ -64,23 +57,18 @@ func TestHttpMetricsGenerator_Poll_EmitsTwoItemsPerTarget(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	})
 
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
+		Discovery:       env.Targets,
+		Store:           env.Store,
+		Clock:           env.Clock,
 		Interval:        30 * time.Second,
 		MetricRetention: 1 * time.Hour,
 		ChunkSize:       6 * time.Hour,
@@ -89,7 +77,7 @@ func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
 		Logger:          slog.Default(),
 	})
 
-	items := gen.Poll(now)
+	items := gen.Poll(env.Now)
 	require.NotEmpty(t, items)
 
 	// All items should include endDate (HTTP metrics endpoints require it)
@@ -101,9 +89,10 @@ func TestHttpMetricsGenerator_Poll_LiveEdge_IncludesEndDate(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
-	// HTTP metrics always include endDate (even live-edge), so all items are
-	// "chunked" from the endDate perspective. The test verifies that large gaps
-	// produce multiple items rather than a single oversized one.
+	// HTTP metrics don't use runGapChunkTests because their chunking behavior
+	// differs: all items always include endDate (even live-edge), each chunk
+	// position emits 2 items (one per QueryKind), and there's no open-ended
+	// vs chunked distinction.
 	tests := []struct {
 		name            string
 		retention       time.Duration
@@ -152,21 +141,17 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			store := mocks.NewMockStateStore(ctrl)
-			targets := mocks.NewMockTargetProvider(ctrl)
-			fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-			now := fakeClock.Now()
+			env := setupGenTest(t)
 
-			targets.EXPECT().Targets().Return([]types.ServiceTarget{
+			env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{
 				{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
 			})
-			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
+			env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 			gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-				Discovery:       targets,
-				Store:           store,
-				Clock:           fakeClock,
+				Discovery:       env.Targets,
+				Store:           env.Store,
+				Clock:           env.Clock,
 				Interval:        30 * time.Second,
 				MetricRetention: tt.retention,
 				ChunkSize:       tt.chunkSize,
@@ -175,7 +160,7 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 				Logger:          slog.Default(),
 			})
 
-			items := gen.Poll(now)
+			items := gen.Poll(env.Now)
 			require.GreaterOrEqual(t, len(items), tt.wantMinItems, "minimum item count")
 
 			// All HTTP metric items must have endDate
@@ -200,14 +185,9 @@ func TestHttpMetricsGenerator_Poll_GapChunking(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -216,8 +196,8 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 		EnvironmentName: "production",
 	}}).AnyTimes()
 
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
-	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
+	env.Store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
+	env.Store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
 	var collected []sink.MetricPoint
 	fakeSink := &recordingSink{
@@ -228,10 +208,10 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 	}
 
 	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
+		Discovery:       env.Targets,
+		Store:           env.Store,
 		Sinks:           []sink.Sink{fakeSink},
-		Clock:           fakeClock,
+		Clock:           env.Clock,
 		Interval:        30 * time.Second,
 		MetricRetention: 1 * time.Hour,
 		StepSeconds:     60,
@@ -242,7 +222,7 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 	rawData := map[string]any{
 		"samples": []map[string]any{
 			{
-				"ts":  now.Add(-2 * time.Minute).Unix(),
+				"ts":  env.Now.Add(-2 * time.Minute).Unix(),
 				"p50": 0.1,
 				"p90": 0.2,
 				"p95": 0.3,
@@ -259,8 +239,8 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 		TaskType: types.TaskTypeMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
-			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
-			"endDate":   now.Format(time.RFC3339),
+			"startDate": env.Now.Add(-5 * time.Minute).Format(time.RFC3339),
+			"endDate":   env.Now.Format(time.RFC3339),
 		},
 	}
 
@@ -294,13 +274,9 @@ func TestHttpMetricsGenerator_Deliver_Duration(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
+	env := setupGenTest(t)
 
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{{
+	env.Targets.EXPECT().Targets().Return([]types.ServiceTarget{{
 		ProjectID:       "proj-1",
 		ProjectName:     "test-project",
 		ServiceID:       "svc-1",
@@ -318,9 +294,9 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 	}
 
 	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery:   targets,
+		Discovery:   env.Targets,
 		Sinks:       []sink.Sink{fakeSink},
-		Clock:       fakeClock,
+		Clock:       env.Clock,
 		Interval:    30 * time.Second,
 		StepSeconds: 60,
 		Logger:      slog.Default(),
@@ -331,13 +307,13 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 		{
 			"statusCode": 200,
 			"samples": []map[string]any{
-				{"ts": now.Add(-2 * time.Minute).Unix(), "value": 42.0},
+				{"ts": env.Now.Add(-2 * time.Minute).Unix(), "value": 42.0},
 			},
 		},
 		{
 			"statusCode": 500,
 			"samples": []map[string]any{
-				{"ts": now.Add(-2 * time.Minute).Unix(), "value": 3.0},
+				{"ts": env.Now.Add(-2 * time.Minute).Unix(), "value": 3.0},
 			},
 		},
 	}
@@ -350,8 +326,8 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 		TaskType: types.TaskTypeMetrics,
 		AliasKey: "svc-1:env-1",
 		Params: map[string]any{
-			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
-			"endDate":   now.Format(time.RFC3339),
+			"startDate": env.Now.Add(-5 * time.Minute).Format(time.RFC3339),
+			"endDate":   env.Now.Format(time.RFC3339),
 		},
 	}
 
@@ -375,69 +351,37 @@ func TestHttpMetricsGenerator_Deliver_Status(t *testing.T) {
 }
 
 func TestHttpMetricsGenerator_Deliver_HandlesError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
-		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"},
-	})
-
-	fakeSink := &recordingSink{}
-
-	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery: targets,
-		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
-		Interval:  30 * time.Second,
-		Logger:    slog.Default(),
-	})
-
-	item := types.WorkItem{
-		ID:       "http-duration:svc-1:env-1",
-		Kind:     types.QueryHttpDurationMetrics,
-		AliasKey: "svc-1:env-1",
-	}
-
-	gen.Deliver(context.Background(), item, nil, assert.AnError)
+	testDeliverHandlesError(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1"}},
+		func(env *genTestEnv, s sink.Sink) types.TaskGenerator {
+			return collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery: env.Targets, Sinks: []sink.Sink{s},
+				Clock: env.Clock, Interval: 30 * time.Second, Logger: slog.Default(),
+			})
+		},
+		types.WorkItem{ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics, AliasKey: "svc-1:env-1"},
+	)
 }
 
 func TestHttpMetricsGenerator_Deliver_EmptyDurationResults(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := mocks.NewMockStateStore(ctrl)
-	targets := mocks.NewMockTargetProvider(ctrl)
-	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
-
-	now := fakeClock.Now()
-
-	targets.EXPECT().Targets().Return([]types.ServiceTarget{
-		{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"},
-	}).AnyTimes()
-
-	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
-	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
-
-	gen := collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-		Discovery:   targets,
-		Store:       store,
-		Sinks:       []sink.Sink{&recordingSink{}},
-		Clock:       fakeClock,
-		Interval:    30 * time.Second,
-		StepSeconds: 60,
-		Logger:      slog.Default(),
-	})
-
-	// Empty duration response
-	data, _ := json.Marshal(map[string]any{"samples": []map[string]any{}})
-	item := types.WorkItem{
-		ID:       "http-duration:svc-1:env-1",
-		Kind:     types.QueryHttpDurationMetrics,
-		AliasKey: "svc-1:env-1",
-		Params: map[string]any{
-			"startDate": now.Add(-5 * time.Minute).Format(time.RFC3339),
-			"endDate":   now.Format(time.RFC3339),
+	emptyJSON, _ := json.Marshal(map[string]any{"samples": []map[string]any{}})
+	testDeliverEmptyResults(t,
+		[]types.ServiceTarget{{ProjectID: "proj-1", ServiceID: "svc-1", ServiceName: "web", EnvironmentID: "env-1", EnvironmentName: "production"}},
+		func(env *genTestEnv) types.TaskGenerator {
+			return collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
+				Discovery: env.Targets, Store: env.Store,
+				Sinks: []sink.Sink{&recordingSink{}},
+				Clock: env.Clock, Interval: 30 * time.Second,
+				StepSeconds: 60, Logger: slog.Default(),
+			})
 		},
-	}
-
-	gen.Deliver(context.Background(), item, data, nil)
+		types.WorkItem{
+			ID: "http-duration:svc-1:env-1", Kind: types.QueryHttpDurationMetrics, AliasKey: "svc-1:env-1",
+			Params: map[string]any{
+				"startDate": time.Date(2026, 3, 9, 11, 55, 0, 0, time.UTC).Format(time.RFC3339),
+				"endDate":   time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+			},
+		},
+		emptyJSON,
+	)
 }
