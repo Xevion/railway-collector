@@ -82,9 +82,7 @@ type WorkItem struct {
 // RailwayAPI abstracts the Railway GraphQL client for testing.
 type RailwayAPI interface {
 	Me(ctx context.Context) (*railway.MeResponse, error)
-	GetProjects(ctx context.Context, workspaceID *string) (*railway.ProjectsResponse, error)
-	GetDeployments(ctx context.Context, projectID, envID, serviceID string, first *int, after *string) (*railway.DeploymentsResponse, error)
-	GetServiceInstance(ctx context.Context, envID, serviceID string) (*railway.ServiceInstanceQueryResponse, error)
+	DiscoverAll(ctx context.Context, workspaceID *string, isEphemeral *bool) (*railway.DiscoverAllResponse, error)
 	RawQuery(ctx context.Context, operationName, query string, variables map[string]any) (*railway.RawQueryResponse, error)
 	IsRateLimited() (bool, time.Duration)
 	RateLimitInfo() (remaining int, resetAt time.Time)
@@ -92,12 +90,10 @@ type RailwayAPI interface {
 
 // StateStore abstracts persistent cursor and cache storage for testing.
 type StateStore interface {
-	GetDiscoveryCache(projectID string) ([]byte, error)
-	SetDiscoveryCache(projectID string, data []byte) error
+	GetDiscoveryCache(key string) ([]byte, error)
+	SetDiscoveryCache(key string, data []byte) error
 	ListDiscoveryCache() (map[string][]byte, error)
-	DeleteDiscoveryCache(projectID string) error
-	GetProjectListCache(workspaceID string) ([]byte, error)
-	SetProjectListCache(workspaceID string, data []byte) error
+	DeleteDiscoveryCache(key string) error
 	GetCoverage(key string) ([]byte, error)
 	SetCoverage(key string, data []byte) error
 	ListCoverage() (map[string][]byte, error)

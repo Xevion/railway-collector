@@ -44,49 +44,19 @@ func (m *MockRailwayAPI) EXPECT() *MockRailwayAPIMockRecorder {
 	return m.recorder
 }
 
-// GetDeployments mocks base method.
-func (m *MockRailwayAPI) GetDeployments(ctx context.Context, projectID, envID, serviceID string, first *int, after *string) (*railway.DeploymentsResponse, error) {
+// DiscoverAll mocks base method.
+func (m *MockRailwayAPI) DiscoverAll(ctx context.Context, workspaceID *string, isEphemeral *bool) (*railway.DiscoverAllResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDeployments", ctx, projectID, envID, serviceID, first, after)
-	ret0, _ := ret[0].(*railway.DeploymentsResponse)
+	ret := m.ctrl.Call(m, "DiscoverAll", ctx, workspaceID, isEphemeral)
+	ret0, _ := ret[0].(*railway.DiscoverAllResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetDeployments indicates an expected call of GetDeployments.
-func (mr *MockRailwayAPIMockRecorder) GetDeployments(ctx, projectID, envID, serviceID, first, after any) *gomock.Call {
+// DiscoverAll indicates an expected call of DiscoverAll.
+func (mr *MockRailwayAPIMockRecorder) DiscoverAll(ctx, workspaceID, isEphemeral any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDeployments", reflect.TypeOf((*MockRailwayAPI)(nil).GetDeployments), ctx, projectID, envID, serviceID, first, after)
-}
-
-// GetProjects mocks base method.
-func (m *MockRailwayAPI) GetProjects(ctx context.Context, workspaceID *string) (*railway.ProjectsResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetProjects", ctx, workspaceID)
-	ret0, _ := ret[0].(*railway.ProjectsResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetProjects indicates an expected call of GetProjects.
-func (mr *MockRailwayAPIMockRecorder) GetProjects(ctx, workspaceID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProjects", reflect.TypeOf((*MockRailwayAPI)(nil).GetProjects), ctx, workspaceID)
-}
-
-// GetServiceInstance mocks base method.
-func (m *MockRailwayAPI) GetServiceInstance(ctx context.Context, envID, serviceID string) (*railway.ServiceInstanceQueryResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetServiceInstance", ctx, envID, serviceID)
-	ret0, _ := ret[0].(*railway.ServiceInstanceQueryResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetServiceInstance indicates an expected call of GetServiceInstance.
-func (mr *MockRailwayAPIMockRecorder) GetServiceInstance(ctx, envID, serviceID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetServiceInstance", reflect.TypeOf((*MockRailwayAPI)(nil).GetServiceInstance), ctx, envID, serviceID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverAll", reflect.TypeOf((*MockRailwayAPI)(nil).DiscoverAll), ctx, workspaceID, isEphemeral)
 }
 
 // IsRateLimited mocks base method.
@@ -231,21 +201,6 @@ func (mr *MockStateStoreMockRecorder) GetDiscoveryCache(projectID any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).GetDiscoveryCache), projectID)
 }
 
-// GetProjectListCache mocks base method.
-func (m *MockStateStore) GetProjectListCache(workspaceID string) ([]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetProjectListCache", workspaceID)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetProjectListCache indicates an expected call of GetProjectListCache.
-func (mr *MockStateStoreMockRecorder) GetProjectListCache(workspaceID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProjectListCache", reflect.TypeOf((*MockStateStore)(nil).GetProjectListCache), workspaceID)
-}
-
 // ListCoverage mocks base method.
 func (m *MockStateStore) ListCoverage() (map[string][]byte, error) {
 	m.ctrl.T.Helper()
@@ -302,20 +257,6 @@ func (m *MockStateStore) SetDiscoveryCache(projectID string, data []byte) error 
 func (mr *MockStateStoreMockRecorder) SetDiscoveryCache(projectID, data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).SetDiscoveryCache), projectID, data)
-}
-
-// SetProjectListCache mocks base method.
-func (m *MockStateStore) SetProjectListCache(workspaceID string, data []byte) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetProjectListCache", workspaceID, data)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetProjectListCache indicates an expected call of SetProjectListCache.
-func (mr *MockStateStoreMockRecorder) SetProjectListCache(workspaceID, data any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetProjectListCache", reflect.TypeOf((*MockStateStore)(nil).SetProjectListCache), workspaceID, data)
 }
 
 // MockTargetProvider is a mock of TargetProvider interface.

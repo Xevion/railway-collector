@@ -137,16 +137,14 @@ func (cmd *RunCmd) Run(c *CLI) error {
 
 	// Initialize discovery with caching
 	discovery := collector.NewDiscovery(collector.DiscoveryConfig{
-		Client:         client,
-		Store:          store,
-		Clock:          clockwork.NewRealClock(),
-		Filters:        cfg.Filters,
-		Workspaces:     workspaces,
-		WorkspaceTTL:   cfg.Collect.Discovery.WorkspaceTTL,
-		ProjectTTL:     cfg.Collect.Discovery.ProjectTTL,
-		ProjectListTTL: cfg.Collect.Discovery.ProjectListTTL,
-		Jitter:         cfg.Collect.Discovery.Jitter,
-		Logger:         logger,
+		Client:       client,
+		Store:        store,
+		Clock:        clockwork.NewRealClock(),
+		Filters:      cfg.Filters,
+		Workspaces:   workspaces,
+		WorkspaceTTL: cfg.Collect.Discovery.WorkspaceTTL,
+		Jitter:       cfg.Collect.Discovery.Jitter,
+		Logger:       logger,
 	})
 	if err := discovery.Refresh(ctx); err != nil {
 		logger.Error("initial discovery failed", "workspaces", len(workspaces), "error", err)

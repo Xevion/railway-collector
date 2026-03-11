@@ -95,22 +95,6 @@ type BuildLogsQueryResponse struct {
 // GetBuildLogs returns BuildLogsQueryResponse.BuildLogs, and is useful for accessing the field via an interface.
 func (v *BuildLogsQueryResponse) GetBuildLogs() []BuildLogsQueryBuildLogsLog { return v.BuildLogs }
 
-type Builder string
-
-const (
-	BuilderHeroku   Builder = "HEROKU"
-	BuilderNixpacks Builder = "NIXPACKS"
-	BuilderPaketo   Builder = "PAKETO"
-	BuilderRailpack Builder = "RAILPACK"
-)
-
-var AllBuilder = []Builder{
-	BuilderHeroku,
-	BuilderNixpacks,
-	BuilderPaketo,
-	BuilderRailpack,
-}
-
 // DeploymentLogsQueryDeploymentLogsLog includes the requested fields of the GraphQL type Log.
 // The GraphQL type's documentation follows.
 //
@@ -238,121 +222,230 @@ var AllDeploymentStatus = []DeploymentStatus{
 	DeploymentStatusWaiting,
 }
 
-// DeploymentsDeploymentsQueryDeploymentsConnection includes the requested fields of the GraphQL type QueryDeploymentsConnection.
-type DeploymentsDeploymentsQueryDeploymentsConnection struct {
-	Edges    []DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge `json:"edges"`
-	PageInfo DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo                              `json:"pageInfo"`
+// DiscoverAllProjectsQueryProjectsConnection includes the requested fields of the GraphQL type QueryProjectsConnection.
+type DiscoverAllProjectsQueryProjectsConnection struct {
+	Edges    []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge `json:"edges"`
+	PageInfo DiscoverAllProjectsQueryProjectsConnectionPageInfo                           `json:"pageInfo"`
 }
 
-// GetEdges returns DeploymentsDeploymentsQueryDeploymentsConnection.Edges, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnection) GetEdges() []DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge {
+// GetEdges returns DiscoverAllProjectsQueryProjectsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnection) GetEdges() []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge {
 	return v.Edges
 }
 
-// GetPageInfo returns DeploymentsDeploymentsQueryDeploymentsConnection.PageInfo, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnection) GetPageInfo() DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo {
+// GetPageInfo returns DiscoverAllProjectsQueryProjectsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnection) GetPageInfo() DiscoverAllProjectsQueryProjectsConnectionPageInfo {
 	return v.PageInfo
 }
 
-// DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge includes the requested fields of the GraphQL type QueryDeploymentsConnectionEdge.
-type DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge struct {
-	Node DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment `json:"node"`
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge includes the requested fields of the GraphQL type QueryProjectsConnectionEdge.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge struct {
+	Node DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject `json:"node"`
 }
 
-// GetNode returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge.Node, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdge) GetNode() DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment {
+// GetNode returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge.Node, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge) GetNode() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject {
 	return v.Node
 }
 
-// DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment includes the requested fields of the GraphQL type Deployment.
-type DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment struct {
-	Id            string           `json:"id"`
-	Status        DeploymentStatus `json:"status"`
-	CreatedAt     string           `json:"createdAt"`
-	UpdatedAt     string           `json:"updatedAt"`
-	StaticUrl     *string          `json:"staticUrl"`
-	Url           *string          `json:"url"`
-	Meta          *any             `json:"meta"`
-	EnvironmentId string           `json:"environmentId"`
-	ServiceId     *string          `json:"serviceId"`
-	ProjectId     string           `json:"projectId"`
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject includes the requested fields of the GraphQL type Project.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject struct {
+	Id           string                                                                                                                         `json:"id"`
+	Name         string                                                                                                                         `json:"name"`
+	Environments DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection `json:"environments"`
 }
 
-// GetId returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.Id, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetId() string {
+// GetId returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Id, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetId() string {
 	return v.Id
 }
 
-// GetStatus returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.Status, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetStatus() DeploymentStatus {
-	return v.Status
+// GetName returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Name, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetName() string {
+	return v.Name
 }
 
-// GetCreatedAt returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.CreatedAt, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetCreatedAt() string {
-	return v.CreatedAt
+// GetEnvironments returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Environments, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetEnvironments() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection {
+	return v.Environments
 }
 
-// GetUpdatedAt returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.UpdatedAt, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetUpdatedAt() string {
-	return v.UpdatedAt
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection includes the requested fields of the GraphQL type ProjectEnvironmentsConnection.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection struct {
+	Edges    []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge `json:"edges"`
+	PageInfo DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo                                 `json:"pageInfo"`
 }
 
-// GetStaticUrl returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.StaticUrl, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetStaticUrl() *string {
-	return v.StaticUrl
+// GetEdges returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection) GetEdges() []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge {
+	return v.Edges
 }
 
-// GetUrl returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.Url, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetUrl() *string {
-	return v.Url
+// GetPageInfo returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection) GetPageInfo() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo {
+	return v.PageInfo
 }
 
-// GetMeta returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.Meta, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetMeta() *any {
-	return v.Meta
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge includes the requested fields of the GraphQL type ProjectEnvironmentsConnectionEdge.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge struct {
+	Node DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment `json:"node"`
 }
 
-// GetEnvironmentId returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.EnvironmentId, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetEnvironmentId() string {
-	return v.EnvironmentId
+// GetNode returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge.Node, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge) GetNode() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment {
+	return v.Node
 }
 
-// GetServiceId returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.ServiceId, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetServiceId() *string {
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment includes the requested fields of the GraphQL type Environment.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment struct {
+	Id               string                                                                                                                                                                                                                                   `json:"id"`
+	Name             string                                                                                                                                                                                                                                   `json:"name"`
+	IsEphemeral      bool                                                                                                                                                                                                                                     `json:"isEphemeral"`
+	ServiceInstances DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection `json:"serviceInstances"`
+}
+
+// GetId returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.Id, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetId() string {
+	return v.Id
+}
+
+// GetName returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.Name, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetName() string {
+	return v.Name
+}
+
+// GetIsEphemeral returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.IsEphemeral, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetIsEphemeral() bool {
+	return v.IsEphemeral
+}
+
+// GetServiceInstances returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.ServiceInstances, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetServiceInstances() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection {
+	return v.ServiceInstances
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection includes the requested fields of the GraphQL type EnvironmentServiceInstancesConnection.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection struct {
+	Edges    []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge `json:"edges"`
+	PageInfo DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo                                         `json:"pageInfo"`
+}
+
+// GetEdges returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection.Edges, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection) GetEdges() []DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnection) GetPageInfo() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo {
+	return v.PageInfo
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge includes the requested fields of the GraphQL type EnvironmentServiceInstancesConnectionEdge.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge struct {
+	Node DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance `json:"node"`
+}
+
+// GetNode returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge.Node, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdge) GetNode() DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance {
+	return v.Node
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance includes the requested fields of the GraphQL type ServiceInstance.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance struct {
+	ServiceId     string  `json:"serviceId"`
+	ServiceName   string  `json:"serviceName"`
+	EnvironmentId string  `json:"environmentId"`
+	Region        *string `json:"region"`
+	// The most recent deployment for this service instance
+	LatestDeployment *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment `json:"latestDeployment"`
+}
+
+// GetServiceId returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance.ServiceId, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance) GetServiceId() string {
 	return v.ServiceId
 }
 
-// GetProjectId returns DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment.ProjectId, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionEdgesQueryDeploymentsConnectionEdgeNodeDeployment) GetProjectId() string {
-	return v.ProjectId
+// GetServiceName returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance.ServiceName, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance) GetServiceName() string {
+	return v.ServiceName
 }
 
-// DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
-type DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo struct {
+// GetEnvironmentId returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance.EnvironmentId, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance) GetEnvironmentId() string {
+	return v.EnvironmentId
+}
+
+// GetRegion returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance.Region, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance) GetRegion() *string {
+	return v.Region
+}
+
+// GetLatestDeployment returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance.LatestDeployment, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstance) GetLatestDeployment() *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment {
+	return v.LatestDeployment
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment includes the requested fields of the GraphQL type Deployment.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment struct {
+	Id     string           `json:"id"`
+	Status DeploymentStatus `json:"status"`
+}
+
+// GetId returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment.Id, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment) GetId() string {
+	return v.Id
+}
+
+// GetStatus returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment.Status, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionEdgesEnvironmentServiceInstancesConnectionEdgeNodeServiceInstanceLatestDeployment) GetStatus() DeploymentStatus {
+	return v.Status
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo struct {
+	HasNextPage bool `json:"hasNextPage"`
+}
+
+// GetHasNextPage returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironmentServiceInstancesEnvironmentServiceInstancesConnectionPageInfo) GetHasNextPage() bool {
+	return v.HasNextPage
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo struct {
+	HasNextPage bool `json:"hasNextPage"`
+}
+
+// GetHasNextPage returns DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionPageInfo) GetHasNextPage() bool {
+	return v.HasNextPage
+}
+
+// DiscoverAllProjectsQueryProjectsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type DiscoverAllProjectsQueryProjectsConnectionPageInfo struct {
 	HasNextPage bool    `json:"hasNextPage"`
 	EndCursor   *string `json:"endCursor"`
 }
 
-// GetHasNextPage returns DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo) GetHasNextPage() bool {
+// GetHasNextPage returns DiscoverAllProjectsQueryProjectsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionPageInfo) GetHasNextPage() bool {
 	return v.HasNextPage
 }
 
-// GetEndCursor returns DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
-func (v *DeploymentsDeploymentsQueryDeploymentsConnectionPageInfo) GetEndCursor() *string {
+// GetEndCursor returns DiscoverAllProjectsQueryProjectsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *DiscoverAllProjectsQueryProjectsConnectionPageInfo) GetEndCursor() *string {
 	return v.EndCursor
 }
 
-// DeploymentsResponse is returned by Deployments on success.
-type DeploymentsResponse struct {
-	// Get all deployments
-	Deployments DeploymentsDeploymentsQueryDeploymentsConnection `json:"deployments"`
+// DiscoverAllResponse is returned by DiscoverAll on success.
+type DiscoverAllResponse struct {
+	// Gets all projects for a user or workspace.
+	Projects DiscoverAllProjectsQueryProjectsConnection `json:"projects"`
 }
 
-// GetDeployments returns DeploymentsResponse.Deployments, and is useful for accessing the field via an interface.
-func (v *DeploymentsResponse) GetDeployments() DeploymentsDeploymentsQueryDeploymentsConnection {
-	return v.Deployments
+// GetProjects returns DiscoverAllResponse.Projects, and is useful for accessing the field via an interface.
+func (v *DiscoverAllResponse) GetProjects() DiscoverAllProjectsQueryProjectsConnection {
+	return v.Projects
 }
 
 // EnvironmentLogsQueryEnvironmentLogsLog includes the requested fields of the GraphQL type Log.
@@ -801,320 +894,6 @@ type MetricsResponse struct {
 // GetMetrics returns MetricsResponse.Metrics, and is useful for accessing the field via an interface.
 func (v *MetricsResponse) GetMetrics() []MetricsMetricsMetricsResult { return v.Metrics }
 
-// ProjectsProjectsQueryProjectsConnection includes the requested fields of the GraphQL type QueryProjectsConnection.
-type ProjectsProjectsQueryProjectsConnection struct {
-	Edges []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge `json:"edges"`
-}
-
-// GetEdges returns ProjectsProjectsQueryProjectsConnection.Edges, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnection) GetEdges() []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge {
-	return v.Edges
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge includes the requested fields of the GraphQL type QueryProjectsConnectionEdge.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge struct {
-	Node ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject `json:"node"`
-}
-
-// GetNode returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge.Node, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdge) GetNode() ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject {
-	return v.Node
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject includes the requested fields of the GraphQL type Project.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject struct {
-	Id           string                                                                                                                      `json:"id"`
-	Name         string                                                                                                                      `json:"name"`
-	Description  *string                                                                                                                     `json:"description"`
-	CreatedAt    string                                                                                                                      `json:"createdAt"`
-	UpdatedAt    string                                                                                                                      `json:"updatedAt"`
-	Environments ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection `json:"environments"`
-	Services     ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection         `json:"services"`
-}
-
-// GetId returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Id, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetId() string {
-	return v.Id
-}
-
-// GetName returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Name, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetName() string {
-	return v.Name
-}
-
-// GetDescription returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Description, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetDescription() *string {
-	return v.Description
-}
-
-// GetCreatedAt returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.CreatedAt, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetCreatedAt() string {
-	return v.CreatedAt
-}
-
-// GetUpdatedAt returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.UpdatedAt, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetUpdatedAt() string {
-	return v.UpdatedAt
-}
-
-// GetEnvironments returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Environments, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetEnvironments() ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection {
-	return v.Environments
-}
-
-// GetServices returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject.Services, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProject) GetServices() ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection {
-	return v.Services
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection includes the requested fields of the GraphQL type ProjectEnvironmentsConnection.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection struct {
-	Edges []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge `json:"edges"`
-}
-
-// GetEdges returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection.Edges, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnection) GetEdges() []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge {
-	return v.Edges
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge includes the requested fields of the GraphQL type ProjectEnvironmentsConnectionEdge.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge struct {
-	Node ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment `json:"node"`
-}
-
-// GetNode returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge.Node, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdge) GetNode() ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment {
-	return v.Node
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment includes the requested fields of the GraphQL type Environment.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment struct {
-	Id          string `json:"id"`
-	Name        string `json:"name"`
-	IsEphemeral bool   `json:"isEphemeral"`
-}
-
-// GetId returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.Id, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetId() string {
-	return v.Id
-}
-
-// GetName returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.Name, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetName() string {
-	return v.Name
-}
-
-// GetIsEphemeral returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment.IsEphemeral, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectEnvironmentsProjectEnvironmentsConnectionEdgesProjectEnvironmentsConnectionEdgeNodeEnvironment) GetIsEphemeral() bool {
-	return v.IsEphemeral
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection includes the requested fields of the GraphQL type ProjectServicesConnection.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection struct {
-	Edges []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge `json:"edges"`
-}
-
-// GetEdges returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection.Edges, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnection) GetEdges() []ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge {
-	return v.Edges
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge includes the requested fields of the GraphQL type ProjectServicesConnectionEdge.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge struct {
-	Node ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService `json:"node"`
-}
-
-// GetNode returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge.Node, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdge) GetNode() ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService {
-	return v.Node
-}
-
-// ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService includes the requested fields of the GraphQL type Service.
-type ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService struct {
-	Id        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-// GetId returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService.Id, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService) GetId() string {
-	return v.Id
-}
-
-// GetName returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService.Name, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService) GetName() string {
-	return v.Name
-}
-
-// GetCreatedAt returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService.CreatedAt, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService) GetCreatedAt() string {
-	return v.CreatedAt
-}
-
-// GetUpdatedAt returns ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService.UpdatedAt, and is useful for accessing the field via an interface.
-func (v *ProjectsProjectsQueryProjectsConnectionEdgesQueryProjectsConnectionEdgeNodeProjectServicesProjectServicesConnectionEdgesProjectServicesConnectionEdgeNodeService) GetUpdatedAt() string {
-	return v.UpdatedAt
-}
-
-// ProjectsResponse is returned by Projects on success.
-type ProjectsResponse struct {
-	// Gets all projects for a user or workspace.
-	Projects ProjectsProjectsQueryProjectsConnection `json:"projects"`
-}
-
-// GetProjects returns ProjectsResponse.Projects, and is useful for accessing the field via an interface.
-func (v *ProjectsResponse) GetProjects() ProjectsProjectsQueryProjectsConnection { return v.Projects }
-
-type RestartPolicyType string
-
-const (
-	RestartPolicyTypeAlways    RestartPolicyType = "ALWAYS"
-	RestartPolicyTypeNever     RestartPolicyType = "NEVER"
-	RestartPolicyTypeOnFailure RestartPolicyType = "ON_FAILURE"
-)
-
-var AllRestartPolicyType = []RestartPolicyType{
-	RestartPolicyTypeAlways,
-	RestartPolicyTypeNever,
-	RestartPolicyTypeOnFailure,
-}
-
-// ServiceInstanceQueryResponse is returned by ServiceInstanceQuery on success.
-type ServiceInstanceQueryResponse struct {
-	// Get a service instance belonging to a service and environment
-	ServiceInstance ServiceInstanceQueryServiceInstance `json:"serviceInstance"`
-}
-
-// GetServiceInstance returns ServiceInstanceQueryResponse.ServiceInstance, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryResponse) GetServiceInstance() ServiceInstanceQueryServiceInstance {
-	return v.ServiceInstance
-}
-
-// ServiceInstanceQueryServiceInstance includes the requested fields of the GraphQL type ServiceInstance.
-type ServiceInstanceQueryServiceInstance struct {
-	Id                      string                                               `json:"id"`
-	ServiceId               string                                               `json:"serviceId"`
-	ServiceName             string                                               `json:"serviceName"`
-	EnvironmentId           string                                               `json:"environmentId"`
-	StartCommand            *string                                              `json:"startCommand"`
-	BuildCommand            *string                                              `json:"buildCommand"`
-	HealthcheckPath         *string                                              `json:"healthcheckPath"`
-	HealthcheckTimeout      *int                                                 `json:"healthcheckTimeout"`
-	Region                  *string                                              `json:"region"`
-	NumReplicas             *int                                                 `json:"numReplicas"`
-	RestartPolicyType       RestartPolicyType                                    `json:"restartPolicyType"`
-	RestartPolicyMaxRetries int                                                  `json:"restartPolicyMaxRetries"`
-	CronSchedule            *string                                              `json:"cronSchedule"`
-	SleepApplication        *bool                                                `json:"sleepApplication"`
-	Builder                 Builder                                              `json:"builder"`
-	Domains                 ServiceInstanceQueryServiceInstanceDomainsAllDomains `json:"domains"`
-}
-
-// GetId returns ServiceInstanceQueryServiceInstance.Id, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetId() string { return v.Id }
-
-// GetServiceId returns ServiceInstanceQueryServiceInstance.ServiceId, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetServiceId() string { return v.ServiceId }
-
-// GetServiceName returns ServiceInstanceQueryServiceInstance.ServiceName, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetServiceName() string { return v.ServiceName }
-
-// GetEnvironmentId returns ServiceInstanceQueryServiceInstance.EnvironmentId, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetEnvironmentId() string { return v.EnvironmentId }
-
-// GetStartCommand returns ServiceInstanceQueryServiceInstance.StartCommand, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetStartCommand() *string { return v.StartCommand }
-
-// GetBuildCommand returns ServiceInstanceQueryServiceInstance.BuildCommand, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetBuildCommand() *string { return v.BuildCommand }
-
-// GetHealthcheckPath returns ServiceInstanceQueryServiceInstance.HealthcheckPath, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetHealthcheckPath() *string { return v.HealthcheckPath }
-
-// GetHealthcheckTimeout returns ServiceInstanceQueryServiceInstance.HealthcheckTimeout, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetHealthcheckTimeout() *int {
-	return v.HealthcheckTimeout
-}
-
-// GetRegion returns ServiceInstanceQueryServiceInstance.Region, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetRegion() *string { return v.Region }
-
-// GetNumReplicas returns ServiceInstanceQueryServiceInstance.NumReplicas, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetNumReplicas() *int { return v.NumReplicas }
-
-// GetRestartPolicyType returns ServiceInstanceQueryServiceInstance.RestartPolicyType, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetRestartPolicyType() RestartPolicyType {
-	return v.RestartPolicyType
-}
-
-// GetRestartPolicyMaxRetries returns ServiceInstanceQueryServiceInstance.RestartPolicyMaxRetries, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetRestartPolicyMaxRetries() int {
-	return v.RestartPolicyMaxRetries
-}
-
-// GetCronSchedule returns ServiceInstanceQueryServiceInstance.CronSchedule, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetCronSchedule() *string { return v.CronSchedule }
-
-// GetSleepApplication returns ServiceInstanceQueryServiceInstance.SleepApplication, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetSleepApplication() *bool { return v.SleepApplication }
-
-// GetBuilder returns ServiceInstanceQueryServiceInstance.Builder, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetBuilder() Builder { return v.Builder }
-
-// GetDomains returns ServiceInstanceQueryServiceInstance.Domains, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstance) GetDomains() ServiceInstanceQueryServiceInstanceDomainsAllDomains {
-	return v.Domains
-}
-
-// ServiceInstanceQueryServiceInstanceDomainsAllDomains includes the requested fields of the GraphQL type AllDomains.
-type ServiceInstanceQueryServiceInstanceDomainsAllDomains struct {
-	CustomDomains  []ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain   `json:"customDomains"`
-	ServiceDomains []ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain `json:"serviceDomains"`
-}
-
-// GetCustomDomains returns ServiceInstanceQueryServiceInstanceDomainsAllDomains.CustomDomains, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomains) GetCustomDomains() []ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain {
-	return v.CustomDomains
-}
-
-// GetServiceDomains returns ServiceInstanceQueryServiceInstanceDomainsAllDomains.ServiceDomains, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomains) GetServiceDomains() []ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain {
-	return v.ServiceDomains
-}
-
-// ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain includes the requested fields of the GraphQL type CustomDomain.
-type ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain struct {
-	Id     string `json:"id"`
-	Domain string `json:"domain"`
-}
-
-// GetId returns ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain.Id, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain) GetId() string {
-	return v.Id
-}
-
-// GetDomain returns ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain.Domain, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomainsCustomDomainsCustomDomain) GetDomain() string {
-	return v.Domain
-}
-
-// ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain includes the requested fields of the GraphQL type ServiceDomain.
-type ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain struct {
-	Id     string `json:"id"`
-	Domain string `json:"domain"`
-}
-
-// GetId returns ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain.Id, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain) GetId() string {
-	return v.Id
-}
-
-// GetDomain returns ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain.Domain, and is useful for accessing the field via an interface.
-func (v *ServiceInstanceQueryServiceInstanceDomainsAllDomainsServiceDomainsServiceDomain) GetDomain() string {
-	return v.Domain
-}
-
 // TcpProxiesQueryResponse is returned by TcpProxiesQuery on success.
 type TcpProxiesQueryResponse struct {
 	// All TCP proxies for a service instance
@@ -1263,29 +1042,17 @@ func (v *__DeploymentLogsQueryInput) GetEndDate() *string { return v.EndDate }
 // GetFilter returns __DeploymentLogsQueryInput.Filter, and is useful for accessing the field via an interface.
 func (v *__DeploymentLogsQueryInput) GetFilter() *string { return v.Filter }
 
-// __DeploymentsInput is used internally by genqlient
-type __DeploymentsInput struct {
-	ProjectId     string  `json:"projectId"`
-	EnvironmentId string  `json:"environmentId"`
-	ServiceId     string  `json:"serviceId"`
-	First         *int    `json:"first"`
-	After         *string `json:"after"`
+// __DiscoverAllInput is used internally by genqlient
+type __DiscoverAllInput struct {
+	WorkspaceId *string `json:"workspaceId"`
+	IsEphemeral *bool   `json:"isEphemeral"`
 }
 
-// GetProjectId returns __DeploymentsInput.ProjectId, and is useful for accessing the field via an interface.
-func (v *__DeploymentsInput) GetProjectId() string { return v.ProjectId }
+// GetWorkspaceId returns __DiscoverAllInput.WorkspaceId, and is useful for accessing the field via an interface.
+func (v *__DiscoverAllInput) GetWorkspaceId() *string { return v.WorkspaceId }
 
-// GetEnvironmentId returns __DeploymentsInput.EnvironmentId, and is useful for accessing the field via an interface.
-func (v *__DeploymentsInput) GetEnvironmentId() string { return v.EnvironmentId }
-
-// GetServiceId returns __DeploymentsInput.ServiceId, and is useful for accessing the field via an interface.
-func (v *__DeploymentsInput) GetServiceId() string { return v.ServiceId }
-
-// GetFirst returns __DeploymentsInput.First, and is useful for accessing the field via an interface.
-func (v *__DeploymentsInput) GetFirst() *int { return v.First }
-
-// GetAfter returns __DeploymentsInput.After, and is useful for accessing the field via an interface.
-func (v *__DeploymentsInput) GetAfter() *string { return v.After }
+// GetIsEphemeral returns __DiscoverAllInput.IsEphemeral, and is useful for accessing the field via an interface.
+func (v *__DiscoverAllInput) GetIsEphemeral() *bool { return v.IsEphemeral }
 
 // __EnvironmentLogsQueryInput is used internally by genqlient
 type __EnvironmentLogsQueryInput struct {
@@ -1398,26 +1165,6 @@ func (v *__MetricsInput) GetSampleRateSeconds() *int { return v.SampleRateSecond
 
 // GetAveragingWindowSeconds returns __MetricsInput.AveragingWindowSeconds, and is useful for accessing the field via an interface.
 func (v *__MetricsInput) GetAveragingWindowSeconds() *int { return v.AveragingWindowSeconds }
-
-// __ProjectsInput is used internally by genqlient
-type __ProjectsInput struct {
-	WorkspaceId *string `json:"workspaceId"`
-}
-
-// GetWorkspaceId returns __ProjectsInput.WorkspaceId, and is useful for accessing the field via an interface.
-func (v *__ProjectsInput) GetWorkspaceId() *string { return v.WorkspaceId }
-
-// __ServiceInstanceQueryInput is used internally by genqlient
-type __ServiceInstanceQueryInput struct {
-	EnvironmentId string `json:"environmentId"`
-	ServiceId     string `json:"serviceId"`
-}
-
-// GetEnvironmentId returns __ServiceInstanceQueryInput.EnvironmentId, and is useful for accessing the field via an interface.
-func (v *__ServiceInstanceQueryInput) GetEnvironmentId() string { return v.EnvironmentId }
-
-// GetServiceId returns __ServiceInstanceQueryInput.ServiceId, and is useful for accessing the field via an interface.
-func (v *__ServiceInstanceQueryInput) GetServiceId() string { return v.ServiceId }
 
 // __TcpProxiesQueryInput is used internally by genqlient
 type __TcpProxiesQueryInput struct {
@@ -1569,22 +1316,43 @@ func DeploymentLogsQuery(
 	return data_, err_
 }
 
-// The query executed by Deployments.
-const Deployments_Operation = `
-query Deployments ($projectId: String!, $environmentId: String!, $serviceId: String!, $first: Int, $after: String) {
-	deployments(first: $first, after: $after, input: {projectId:$projectId,environmentId:$environmentId,serviceId:$serviceId}) {
+// The query executed by DiscoverAll.
+const DiscoverAll_Operation = `
+query DiscoverAll ($workspaceId: String, $isEphemeral: Boolean) {
+	projects(first: 250, workspaceId: $workspaceId) {
 		edges {
 			node {
 				id
-				status
-				createdAt
-				updatedAt
-				staticUrl
-				url
-				meta
-				environmentId
-				serviceId
-				projectId
+				name
+				environments(isEphemeral: $isEphemeral) {
+					edges {
+						node {
+							id
+							name
+							isEphemeral
+							serviceInstances {
+								edges {
+									node {
+										serviceId
+										serviceName
+										environmentId
+										region
+										latestDeployment {
+											id
+											status
+										}
+									}
+								}
+								pageInfo {
+									hasNextPage
+								}
+							}
+						}
+					}
+					pageInfo {
+						hasNextPage
+					}
+				}
 			}
 		}
 		pageInfo {
@@ -1595,28 +1363,22 @@ query Deployments ($projectId: String!, $environmentId: String!, $serviceId: Str
 }
 `
 
-func Deployments(
+func DiscoverAll(
 	ctx_ context.Context,
 	client_ graphql.Client,
-	projectId string,
-	environmentId string,
-	serviceId string,
-	first *int,
-	after *string,
-) (data_ *DeploymentsResponse, err_ error) {
+	workspaceId *string,
+	isEphemeral *bool,
+) (data_ *DiscoverAllResponse, err_ error) {
 	req_ := &graphql.Request{
-		OpName: "Deployments",
-		Query:  Deployments_Operation,
-		Variables: &__DeploymentsInput{
-			ProjectId:     projectId,
-			EnvironmentId: environmentId,
-			ServiceId:     serviceId,
-			First:         first,
-			After:         after,
+		OpName: "DiscoverAll",
+		Query:  DiscoverAll_Operation,
+		Variables: &__DiscoverAllInput{
+			WorkspaceId: workspaceId,
+			IsEphemeral: isEphemeral,
 		},
 	}
 
-	data_ = &DeploymentsResponse{}
+	data_ = &DiscoverAllResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -1876,127 +1638,6 @@ func Metrics(
 	}
 
 	data_ = &MetricsResponse{}
-	resp_ := &graphql.Response{Data: data_}
-
-	err_ = client_.MakeRequest(
-		ctx_,
-		req_,
-		resp_,
-	)
-
-	return data_, err_
-}
-
-// The query executed by Projects.
-const Projects_Operation = `
-query Projects ($workspaceId: String) {
-	projects(first: 250, workspaceId: $workspaceId) {
-		edges {
-			node {
-				id
-				name
-				description
-				createdAt
-				updatedAt
-				environments {
-					edges {
-						node {
-							id
-							name
-							isEphemeral
-						}
-					}
-				}
-				services {
-					edges {
-						node {
-							id
-							name
-							createdAt
-							updatedAt
-						}
-					}
-				}
-			}
-		}
-	}
-}
-`
-
-func Projects(
-	ctx_ context.Context,
-	client_ graphql.Client,
-	workspaceId *string,
-) (data_ *ProjectsResponse, err_ error) {
-	req_ := &graphql.Request{
-		OpName: "Projects",
-		Query:  Projects_Operation,
-		Variables: &__ProjectsInput{
-			WorkspaceId: workspaceId,
-		},
-	}
-
-	data_ = &ProjectsResponse{}
-	resp_ := &graphql.Response{Data: data_}
-
-	err_ = client_.MakeRequest(
-		ctx_,
-		req_,
-		resp_,
-	)
-
-	return data_, err_
-}
-
-// The query executed by ServiceInstanceQuery.
-const ServiceInstanceQuery_Operation = `
-query ServiceInstanceQuery ($environmentId: String!, $serviceId: String!) {
-	serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
-		id
-		serviceId
-		serviceName
-		environmentId
-		startCommand
-		buildCommand
-		healthcheckPath
-		healthcheckTimeout
-		region
-		numReplicas
-		restartPolicyType
-		restartPolicyMaxRetries
-		cronSchedule
-		sleepApplication
-		builder
-		domains {
-			customDomains {
-				id
-				domain
-			}
-			serviceDomains {
-				id
-				domain
-			}
-		}
-	}
-}
-`
-
-func ServiceInstanceQuery(
-	ctx_ context.Context,
-	client_ graphql.Client,
-	environmentId string,
-	serviceId string,
-) (data_ *ServiceInstanceQueryResponse, err_ error) {
-	req_ := &graphql.Request{
-		OpName: "ServiceInstanceQuery",
-		Query:  ServiceInstanceQuery_Operation,
-		Variables: &__ServiceInstanceQueryInput{
-			EnvironmentId: environmentId,
-			ServiceId:     serviceId,
-		},
-	}
-
-	data_ = &ServiceInstanceQueryResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(

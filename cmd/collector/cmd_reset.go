@@ -6,20 +6,19 @@ import (
 
 // ResetCmd deletes state entries. Requires exclusive DB access.
 type ResetCmd struct {
-	Bucket string `help:"Bucket to clear: log_cursors, discovery_cache, project_list_cache, coverage." required:""`
+	Bucket string `help:"Bucket to clear: log_cursors, discovery_cache, coverage." required:""`
 	Key    string `help:"Delete a single key instead of the entire bucket."`
 }
 
 var validBuckets = map[string]bool{
-	"log_cursors":        true,
-	"discovery_cache":    true,
-	"project_list_cache": true,
-	"coverage":           true,
+	"log_cursors":     true,
+	"discovery_cache": true,
+	"coverage":        true,
 }
 
 func (cmd *ResetCmd) Run(c *CLI) error {
 	if !validBuckets[cmd.Bucket] {
-		return fmt.Errorf("unknown bucket %q; valid: log_cursors, discovery_cache, project_list_cache, coverage", cmd.Bucket)
+		return fmt.Errorf("unknown bucket %q; valid: log_cursors, discovery_cache, coverage", cmd.Bucket)
 	}
 
 	reader, err := openWriter(c.State, c.Config)

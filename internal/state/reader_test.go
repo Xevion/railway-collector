@@ -83,7 +83,7 @@ func TestReader_BucketStats(t *testing.T) {
 
 	stats, err := reader.BucketStats()
 	require.NoError(t, err)
-	assert.Len(t, stats, 5)
+	assert.Len(t, stats, 4)
 
 	counts := map[string]int{}
 	for _, s := range stats {

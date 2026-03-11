@@ -16,10 +16,10 @@ type DiscoveryGeneratorConfig struct {
 
 // DiscoveryGenerator implements TaskGenerator as a thin wrapper around Discovery.
 //
-// Unlike metrics/logs generators, discovery involves cascading API calls
-// (workspaces -> projects -> deployments -> service instances) that don't map
-// to a single raw GraphQL query. The scheduler handles QueryDiscovery items
-// specially by calling Discovery.Refresh() instead of building a batched query.
+// Discovery uses a single nested GraphQL query per workspace that returns
+// projects, environments, service instances, regions, and latest deployments.
+// The scheduler handles QueryDiscovery items specially by calling
+// Discovery.Refresh() instead of building a batched query.
 //
 // Deliver() is a no-op because Refresh() updates Discovery's internal state directly.
 type DiscoveryGenerator struct {

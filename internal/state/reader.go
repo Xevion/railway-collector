@@ -95,11 +95,6 @@ func (r *Reader) DiscoveryEntries() ([]RawEntry, error) {
 	return r.readRaw(discoveryCacheBucket)
 }
 
-// ProjectListEntries returns all raw entries from the project_list_cache bucket.
-func (r *Reader) ProjectListEntries() ([]RawEntry, error) {
-	return r.readRaw(projectListBucket)
-}
-
 // CoverageEntries returns all raw entries from the coverage bucket.
 func (r *Reader) CoverageEntries() ([]RawEntry, error) {
 	return r.readRaw(coverageBucket)
@@ -131,7 +126,6 @@ func (r *Reader) BucketStats() ([]BucketStat, error) {
 		metricCursorBucket,
 		logCursorBucket,
 		discoveryCacheBucket,
-		projectListBucket,
 		coverageBucket,
 	}
 

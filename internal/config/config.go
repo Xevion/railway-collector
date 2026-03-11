@@ -85,10 +85,6 @@ type DiscoveryCollectConfig struct {
 	RefreshInterval time.Duration `koanf:"refresh_interval"`
 	// Base TTL for workspace list cache (default 1h)
 	WorkspaceTTL time.Duration `koanf:"workspace_ttl"`
-	// Base TTL for per-project discovery cache (default 1h)
-	ProjectTTL time.Duration `koanf:"project_ttl"`
-	// Base TTL for project list (GetProjects) cache (default 4h)
-	ProjectListTTL time.Duration `koanf:"project_list_ttl"`
 	// Random jitter applied to TTLs: ±jitter (default 15m)
 	Jitter time.Duration `koanf:"jitter"`
 }
@@ -190,8 +186,6 @@ func DefaultConfig() *Config {
 				RefreshEnabled:  true,
 				RefreshInterval: 2 * time.Hour,
 				WorkspaceTTL:    time.Hour,
-				ProjectTTL:      time.Hour,
-				ProjectListTTL:  4 * time.Hour,
 				Jitter:          15 * time.Minute,
 			},
 			GapFill: GapFillConfig{

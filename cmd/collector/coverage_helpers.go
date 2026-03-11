@@ -91,7 +91,7 @@ func buildNameResolver(reader interface {
 	}
 
 	for _, e := range discoveryEntries {
-		var cached collector.PersistedProjectCache
+		var cached collector.PersistedWorkspaceDiscovery
 		if err := json.Unmarshal(e.Value, &cached); err != nil {
 			continue
 		}
@@ -207,7 +207,7 @@ func extractDiscoveryTargets(reader interface {
 	}
 	var targets []collector.ServiceTarget
 	for _, e := range entries {
-		var cached collector.PersistedProjectCache
+		var cached collector.PersistedWorkspaceDiscovery
 		if err := json.Unmarshal(e.Value, &cached); err != nil {
 			continue
 		}

@@ -12,16 +12,16 @@ import (
 
 // DiscoveryCmd shows cached discovery data.
 type DiscoveryCmd struct {
-	Project string `help:"Show full cached JSON for a specific project ID."`
-	Verbose bool   `help:"Show all services and deployments per project."`
+	Workspace string `help:"Show full cached JSON for a specific workspace ID."`
+	Verbose   bool   `help:"Show all services and deployments per workspace."`
 }
 
 type discoverySummaryJSON struct {
-	ProjectID string `json:"project_id"`
-	Targets   int    `json:"targets"`
-	ExpiresAt string `json:"expires_at"`
-	Expired   bool   `json:"expired"`
-	CacheAge  string `json:"cache_age,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	Targets     int    `json:"targets"`
+	ExpiresAt   string `json:"expires_at"`
+	Expired     bool   `json:"expired"`
+	CacheAge    string `json:"cache_age,omitempty"`
 }
 
 type discoveryDetailJSON struct {
@@ -54,13 +54,13 @@ func (cmd *DiscoveryCmd) Run(c *CLI) error {
 	f := formatter(c.JSON)
 	now := time.Now()
 
-	// Single project detail mode
-	if cmd.Project != "" {
+	// Single workspace detail mode
+	if cmd.Workspace != "" {
 		for _, e := range entries {
-			if e.Key != cmd.Project {
+			if e.Key != cmd.Workspace {
 				continue
 			}
-			var cached collector.PersistedProjectCache
+			var cached collector.PersistedWorkspaceDiscovery
 			if err := json.Unmarshal(e.Value, &cached); err != nil {
 				return fmt.Errorf("parsing discovery cache for %s: %w", e.Key, err)
 			}
@@ -95,19 +95,19 @@ func (cmd *DiscoveryCmd) Run(c *CLI) error {
 			f.WriteTable(headers, rows)
 			return nil
 		}
-		fmt.Printf("No discovery cache found for project %s.\n", cmd.Project)
+		fmt.Printf("No discovery cache found for workspace %s.\n", cmd.Workspace)
 		return nil
 	}
 
 	// Summary mode
 	type entry struct {
-		projectID string
-		cache     collector.PersistedProjectCache
+		workspaceID string
+		cache       collector.PersistedWorkspaceDiscovery
 	}
 
 	var parsed []entry
 	for _, e := range entries {
-		var cached collector.PersistedProjectCache
+		var cached collector.PersistedWorkspaceDiscovery
 		if err := json.Unmarshal(e.Value, &cached); err != nil {
 			continue
 		}
@@ -118,17 +118,17 @@ func (cmd *DiscoveryCmd) Run(c *CLI) error {
 		var jsonOut []discoverySummaryJSON
 		for _, p := range parsed {
 			jsonOut = append(jsonOut, discoverySummaryJSON{
-				ProjectID: p.projectID,
-				Targets:   len(p.cache.Targets),
-				ExpiresAt: p.cache.ExpiresAt.Format(time.RFC3339),
-				Expired:   now.After(p.cache.ExpiresAt),
+				WorkspaceID: p.workspaceID,
+				Targets:     len(p.cache.Targets),
+				ExpiresAt:   p.cache.ExpiresAt.Format(time.RFC3339),
+				Expired:     now.After(p.cache.ExpiresAt),
 			})
 		}
 		return f.WriteJSON(jsonOut)
 	}
 
 	if cmd.Verbose {
-		headers := []string{"Project ID", "Service", "Environment", "Deployment", "Region", "Expires"}
+		headers := []string{"Workspace ID", "Service", "Environment", "Deployment", "Region", "Expires"}
 		var rows [][]string
 		for _, p := range parsed {
 			for _, t := range p.cache.Targets {
@@ -137,7 +137,7 @@ func (cmd *DiscoveryCmd) Run(c *CLI) error {
 					marker = " <- expired"
 				}
 				rows = append(rows, []string{
-					truncate(p.projectID, 12),
+					truncate(p.workspaceID, 12),
 					t.ServiceName,
 					t.EnvironmentName,
 					truncate(t.DeploymentID, 12),
@@ -151,22 +151,16 @@ func (cmd *DiscoveryCmd) Run(c *CLI) error {
 	}
 
 	// Default summary
-	headers := []string{"Project ID", "Targets", "Expires", ""}
+	headers := []string{"Workspace ID", "Targets", "Expires", ""}
 	var rows [][]string
 	for _, p := range parsed {
 		marker := ""
 		if now.After(p.cache.ExpiresAt) {
 			marker = "<- expired"
 		}
-		projectName := p.projectID
-		if len(p.cache.Targets) > 0 {
-			projectName = p.cache.Targets[0].ProjectName
-			if projectName == "" {
-				projectName = p.projectID
-			}
-		}
+		workspaceName := p.workspaceID
 		rows = append(rows, []string{
-			projectName,
+			workspaceName,
 			fmt.Sprintf("%d", len(p.cache.Targets)),
 			humanize.RelTime(p.cache.ExpiresAt, now, "ago", "from now"),
 			marker,

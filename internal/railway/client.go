@@ -366,24 +366,11 @@ func (c *Client) Me(ctx context.Context) (*MeResponse, error) {
 	})
 }
 
-// GetProjects returns all projects, optionally filtered by workspace.
-func (c *Client) GetProjects(ctx context.Context, workspaceID *string) (*ProjectsResponse, error) {
-	return do(c, ctx, "GetProjects", func() (*ProjectsResponse, error) {
-		return Projects(ctx, c.gql, workspaceID)
-	})
-}
-
-// GetDeployments returns deployments for a service in an environment.
-func (c *Client) GetDeployments(ctx context.Context, projectID, envID, serviceID string, first *int, after *string) (*DeploymentsResponse, error) {
-	return do(c, ctx, "GetDeployments", func() (*DeploymentsResponse, error) {
-		return Deployments(ctx, c.gql, projectID, envID, serviceID, first, after)
-	})
-}
-
-// GetServiceInstance returns the service instance config.
-func (c *Client) GetServiceInstance(ctx context.Context, envID, serviceID string) (*ServiceInstanceQueryResponse, error) {
-	return do(c, ctx, "GetServiceInstance", func() (*ServiceInstanceQueryResponse, error) {
-		return ServiceInstanceQuery(ctx, c.gql, envID, serviceID)
+// DiscoverAll returns all projects with nested environments, service instances,
+// and latest deployments for a workspace in a single query.
+func (c *Client) DiscoverAll(ctx context.Context, workspaceID *string, isEphemeral *bool) (*DiscoverAllResponse, error) {
+	return do(c, ctx, "DiscoverAll", func() (*DiscoverAllResponse, error) {
+		return DiscoverAll(ctx, c.gql, workspaceID, isEphemeral)
 	})
 }
 

@@ -13,108 +13,46 @@ query Me {
   }
 }
 
-query Projects($workspaceId: String) {
+query DiscoverAll($workspaceId: String, $isEphemeral: Boolean) {
   projects(first: 250, workspaceId: $workspaceId) {
     edges {
       node {
         id
         name
-        description
-        createdAt
-        updatedAt
-        environments {
+        environments(isEphemeral: $isEphemeral) {
           edges {
             node {
               id
               name
               isEphemeral
+              serviceInstances {
+                edges {
+                  node {
+                    serviceId
+                    serviceName
+                    environmentId
+                    region
+                    latestDeployment {
+                      id
+                      status
+                    }
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                }
+              }
             }
           }
-        }
-        services {
-          edges {
-            node {
-              id
-              name
-              createdAt
-              updatedAt
-            }
+          pageInfo {
+            hasNextPage
           }
         }
-      }
-    }
-  }
-}
-
-query Deployments(
-  $projectId: String!
-  $environmentId: String!
-  $serviceId: String!
-  $first: Int
-  $after: String
-) {
-  deployments(
-    first: $first
-    after: $after
-    input: {
-      projectId: $projectId
-      environmentId: $environmentId
-      serviceId: $serviceId
-    }
-  ) {
-    edges {
-      node {
-        id
-        status
-        createdAt
-        updatedAt
-        staticUrl
-        url
-        meta
-        environmentId
-        serviceId
-        projectId
       }
     }
     pageInfo {
       hasNextPage
       endCursor
-    }
-  }
-}
-
-query ServiceInstanceQuery(
-  $environmentId: String!
-  $serviceId: String!
-) {
-  serviceInstance(
-    environmentId: $environmentId
-    serviceId: $serviceId
-  ) {
-    id
-    serviceId
-    serviceName
-    environmentId
-    startCommand
-    buildCommand
-    healthcheckPath
-    healthcheckTimeout
-    region
-    numReplicas
-    restartPolicyType
-    restartPolicyMaxRetries
-    cronSchedule
-    sleepApplication
-    builder
-    domains {
-      customDomains {
-        id
-        domain
-      }
-      serviceDomains {
-        id
-        domain
-      }
     }
   }
 }
