@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-
-	"github.com/jonboulle/clockwork"
 
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
@@ -17,79 +14,32 @@ import (
 
 // ServiceMetricsGeneratorConfig configures a ServiceMetricsGenerator.
 type ServiceMetricsGeneratorConfig struct {
-	Discovery       TargetProvider
-	Store           StateStore
-	Sinks           []sink.Sink
-	Clock           clockwork.Clock
-	Measurements    []railway.MetricMeasurement
-	SampleRate      int
-	AvgWindow       int
-	Interval        time.Duration // minimum time between polls (e.g. 30s)
-	MetricRetention time.Duration // how far back to scan for gaps (e.g. 90 days)
-	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
-	MaxItemsPerPoll int           // max work items to emit per poll
-	Logger          *slog.Logger
+	BaseMetricsConfig
 }
 
 // ServiceMetricsGenerator implements TaskGenerator for per-service+environment
 // metrics collection. It scans coverage gaps for each unique (serviceID, environmentID)
 // pair, prioritizes by recency, and emits chunked WorkItems.
 type ServiceMetricsGenerator struct {
-	discovery       TargetProvider
-	store           StateStore
-	sinks           []sink.Sink
-	clock           clockwork.Clock
-	measurements    []railway.MetricMeasurement
-	sampleRate      int
-	avgWindow       int
-	interval        time.Duration
-	metricRetention time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	logger          *slog.Logger
-
-	nextPoll time.Time // earliest time to emit items again
+	baseMetrics
 }
 
 // NewServiceMetricsGenerator creates a ServiceMetricsGenerator.
 func NewServiceMetricsGenerator(cfg ServiceMetricsGeneratorConfig) *ServiceMetricsGenerator {
-	measurements := cfg.Measurements
-	if len(measurements) == 0 {
-		measurements = []railway.MetricMeasurement{
-			railway.MetricMeasurementCpuUsage,
-			railway.MetricMeasurementCpuLimit,
-			railway.MetricMeasurementMemoryUsageGb,
-			railway.MetricMeasurementMemoryLimitGb,
-			railway.MetricMeasurementNetworkRxGb,
-			railway.MetricMeasurementNetworkTxGb,
-			railway.MetricMeasurementDiskUsageGb,
-			railway.MetricMeasurementEphemeralDiskUsageGb,
-			railway.MetricMeasurementBackupUsageGb,
-		}
-	}
-	if cfg.MetricRetention == 0 {
-		cfg.MetricRetention = 90 * 24 * time.Hour
-	}
-	if cfg.ChunkSize == 0 {
-		cfg.ChunkSize = 6 * time.Hour
-	}
-	if cfg.MaxItemsPerPoll == 0 {
-		cfg.MaxItemsPerPoll = 10
-	}
+	measurements := applyConfigDefaults(&cfg.BaseMetricsConfig, []railway.MetricMeasurement{
+		railway.MetricMeasurementCpuUsage,
+		railway.MetricMeasurementCpuLimit,
+		railway.MetricMeasurementMemoryUsageGb,
+		railway.MetricMeasurementMemoryLimitGb,
+		railway.MetricMeasurementNetworkRxGb,
+		railway.MetricMeasurementNetworkTxGb,
+		railway.MetricMeasurementDiskUsageGb,
+		railway.MetricMeasurementEphemeralDiskUsageGb,
+		railway.MetricMeasurementBackupUsageGb,
+	})
 
 	return &ServiceMetricsGenerator{
-		discovery:       cfg.Discovery,
-		store:           cfg.Store,
-		sinks:           cfg.Sinks,
-		clock:           cfg.Clock,
-		measurements:    measurements,
-		sampleRate:      cfg.SampleRate,
-		avgWindow:       cfg.AvgWindow,
-		interval:        cfg.Interval,
-		metricRetention: cfg.MetricRetention,
-		chunkSize:       cfg.ChunkSize,
-		maxItemsPerPoll: cfg.MaxItemsPerPoll,
-		logger:          cfg.Logger,
+		baseMetrics: newBaseMetrics(cfg.BaseMetricsConfig, measurements),
 	}
 }
 
@@ -100,28 +50,6 @@ func (g *ServiceMetricsGenerator) Type() TaskType {
 
 // NextPoll returns the earliest time this generator will produce work.
 func (g *ServiceMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
-
-// metricsBatchKey computes the batch key from shared query parameters.
-// Items with the same batch key can be merged into one aliased request.
-func (g *ServiceMetricsGenerator) metricsBatchKey() string {
-	var parts []string
-	for _, m := range g.measurements {
-		parts = append(parts, string(m))
-	}
-	return fmt.Sprintf("sr=%d,aw=%d,m=%s", g.sampleRate, g.avgWindow, strings.Join(parts, "+"))
-}
-
-// metricsBatchKeyChunk computes a batch key for a chunked (older gap) query.
-// Includes chunk boundaries so that items for the same time window can be merged.
-func (g *ServiceMetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time.Time) string {
-	var parts []string
-	for _, m := range g.measurements {
-		parts = append(parts, string(m))
-	}
-	return fmt.Sprintf("sr=%d,aw=%d,m=%s,s=%s,e=%s",
-		g.sampleRate, g.avgWindow, strings.Join(parts, "+"),
-		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
-}
 
 // Poll scans coverage gaps for all unique service+environment pairs,
 // prioritizes by recency (live edge first), and returns WorkItems.
@@ -205,7 +133,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 							Kind:     QueryServiceMetrics,
 							TaskType: TaskTypeMetrics,
 							AliasKey: compositeKey,
-							BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
+							BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
 							Params: map[string]any{
 								"serviceId":              target.ServiceID,
 								"environmentId":          target.EnvironmentID,
@@ -232,7 +160,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 					Kind:     QueryServiceMetrics,
 					TaskType: TaskTypeMetrics,
 					AliasKey: compositeKey,
-					BatchKey: g.metricsBatchKey(),
+					BatchKey: metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow),
 					Params: map[string]any{
 						"serviceId":              target.ServiceID,
 						"environmentId":          target.EnvironmentID,
@@ -257,7 +185,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []WorkItem {
 						Kind:     QueryServiceMetrics,
 						TaskType: TaskTypeMetrics,
 						AliasKey: compositeKey,
-						BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
+						BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
 						Params: map[string]any{
 							"serviceId":              target.ServiceID,
 							"environmentId":          target.EnvironmentID,
@@ -289,26 +217,12 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
 
-	// Split composite key to get individual IDs
-	parts := strings.SplitN(compositeKey, ":", 2)
-	serviceID := parts[0]
-	environmentID := ""
-	if len(parts) > 1 {
-		environmentID = parts[1]
-	}
-
-	// Look up names from targets
-	serviceName := ""
-	environmentName := ""
-	projectName := ""
-	for _, t := range targets {
-		if t.ServiceID == serviceID && t.EnvironmentID == environmentID {
-			serviceName = t.ServiceName
-			environmentName = t.EnvironmentName
-			projectName = t.ProjectName
-			break
-		}
-	}
+	info := parseCompositeKey(compositeKey, targets)
+	serviceID := info.serviceID
+	environmentID := info.environmentID
+	serviceName := info.serviceName
+	environmentName := info.environmentName
+	projectName := info.projectName
 
 	if err != nil {
 		g.logger.Error("service metrics delivery failed",
@@ -341,30 +255,12 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr != nil {
-			g.logger.Warn("failed to load service metric coverage",
+		covKey := CoverageKey(compositeKey, CoverageTypeServiceMetric)
+		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
+			g.logger.Warn("failed to update service metric coverage",
 				"service", serviceName, "service_id", serviceID,
 				"environment", environmentName, "environment_id", environmentID,
 				"error", covErr)
-		} else {
-			kind := CoverageCollected
-			if len(results) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start:      startTime,
-				End:        endTime,
-				Kind:       kind,
-				Resolution: g.sampleRate,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save service metric coverage",
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", saveErr)
-			}
 		}
 	}
 
@@ -413,15 +309,5 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	)
 
 	// Write to sinks
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write service metrics to sink",
-					"sink", s.Name(),
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }

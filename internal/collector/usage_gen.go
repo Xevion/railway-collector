@@ -275,16 +275,7 @@ func (g *UsageGenerator) deliverUsage(
 		"results", len(results), "points", len(points),
 	)
 
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write usage to sink",
-					"sink", s.Name(),
-					"project", projectName, "project_id", projectID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }
 
 // deliverEstimatedUsage handles QueryEstimatedUsage responses.
@@ -341,14 +332,5 @@ func (g *UsageGenerator) deliverEstimatedUsage(
 		"results", len(results), "points", len(points),
 	)
 
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write estimated usage to sink",
-					"sink", s.Name(),
-					"project", projectName, "project_id", projectID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }

@@ -397,30 +397,12 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	// Update coverage (duration is the primary coverage updater for both kinds)
 	compositeKey := serviceID + ":" + environmentID
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr != nil {
-			g.logger.Warn("failed to load http metric coverage",
+		covKey := CoverageKey(compositeKey, CoverageTypeHTTPMetric)
+		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(resp.Samples) == 0, g.stepSeconds); covErr != nil {
+			g.logger.Warn("failed to update http metric coverage",
 				"service", serviceName, "service_id", serviceID,
 				"environment", environmentName, "environment_id", environmentID,
 				"error", covErr)
-		} else {
-			kind := CoverageCollected
-			if len(resp.Samples) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start:      startTime,
-				End:        endTime,
-				Kind:       kind,
-				Resolution: g.stepSeconds,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save http metric coverage",
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", saveErr)
-			}
 		}
 	}
 
@@ -470,17 +452,7 @@ func (g *HttpMetricsGenerator) deliverDuration(
 		"start", startDateStr, "end", endTime.Format(time.RFC3339),
 	)
 
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write http duration metrics to sink",
-					"sink", s.Name(),
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }
 
 // deliverStatus handles QueryHttpMetricsGroupedByStatus responses.
@@ -544,15 +516,5 @@ func (g *HttpMetricsGenerator) deliverStatus(
 		"start", startDateStr, "end", endTime.Format(time.RFC3339),
 	)
 
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write http status metrics to sink",
-					"sink", s.Name(),
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }

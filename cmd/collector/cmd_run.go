@@ -172,29 +172,12 @@ func (cmd *RunCmd) Run(c *CLI) error {
 
 	if cfg.Collect.Metrics.Enabled {
 		generators = append(generators, collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
-			Discovery:       discovery,
-			Store:           store,
-			Sinks:           sinks,
-			Clock:           realClock,
-			Measurements:    measurements,
-			SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-			AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-			Interval:        cfg.Collect.Metrics.Interval,
-			MetricRetention: cfg.Collect.GapFill.MetricRetention,
-			ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-			Logger:          logger,
-		}))
-
-		// Service-level metrics
-		if cfg.Collect.Metrics.Service.Enabled {
-			svcMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Service.Measurements)
-			generators = append(generators, collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
+			BaseMetricsConfig: collector.BaseMetricsConfig{
 				Discovery:       discovery,
 				Store:           store,
 				Sinks:           sinks,
 				Clock:           realClock,
-				Measurements:    svcMeasurements,
+				Measurements:    measurements,
 				SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
 				AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
 				Interval:        cfg.Collect.Metrics.Interval,
@@ -202,6 +185,27 @@ func (cmd *RunCmd) Run(c *CLI) error {
 				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
 				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
 				Logger:          logger,
+			},
+		}))
+
+		// Service-level metrics
+		if cfg.Collect.Metrics.Service.Enabled {
+			svcMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Service.Measurements)
+			generators = append(generators, collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery:       discovery,
+					Store:           store,
+					Sinks:           sinks,
+					Clock:           realClock,
+					Measurements:    svcMeasurements,
+					SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+					AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+					Interval:        cfg.Collect.Metrics.Interval,
+					MetricRetention: cfg.Collect.GapFill.MetricRetention,
+					ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+					MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+					Logger:          logger,
+				},
 			}))
 		}
 
@@ -209,18 +213,20 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		if cfg.Collect.Metrics.Replica.Enabled {
 			replicaMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Replica.Measurements)
 			generators = append(generators, collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
-				Discovery:       discovery,
-				Store:           store,
-				Sinks:           sinks,
-				Clock:           realClock,
-				Measurements:    replicaMeasurements,
-				SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-				AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-				Interval:        cfg.Collect.Metrics.Interval,
-				MetricRetention: cfg.Collect.GapFill.MetricRetention,
-				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-				Logger:          logger,
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery:       discovery,
+					Store:           store,
+					Sinks:           sinks,
+					Clock:           realClock,
+					Measurements:    replicaMeasurements,
+					SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+					AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+					Interval:        cfg.Collect.Metrics.Interval,
+					MetricRetention: cfg.Collect.GapFill.MetricRetention,
+					ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+					MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+					Logger:          logger,
+				},
 			}))
 		}
 

@@ -495,20 +495,10 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(envID, CoverageTypeLogEnv)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr == nil {
-			kind := CoverageCollected
-			if len(entries) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start: covStart, End: covEnd, Kind: kind,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save log coverage",
-					"environment", envName, "environment_id", envID, "error", saveErr)
-			}
+		covKey := CoverageKey(envID, CoverageTypeLogEnv)
+		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+			g.logger.Warn("failed to update log coverage",
+				"environment", envName, "environment_id", envID, "error", covErr)
 		}
 	}
 
@@ -520,14 +510,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 		"environment", envName, "environment_id", envID, "entries", len(entries),
 		"start", afterDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
-	if len(entries) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
-				g.logger.Error("failed to write logs to sink",
-					"sink", s.Name(), "environment", envName, "error", sinkErr)
-			}
-		}
-	}
+	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
 
 func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
@@ -592,20 +575,10 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(deploymentID, CoverageTypeLogBuild)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr == nil {
-			kind := CoverageCollected
-			if len(entries) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start: covStart, End: covEnd, Kind: kind,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save build log coverage",
-					"deployment_id", deploymentID, "error", saveErr)
-			}
+		covKey := CoverageKey(deploymentID, CoverageTypeLogBuild)
+		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+			g.logger.Warn("failed to update build log coverage",
+				"deployment_id", deploymentID, "error", covErr)
 		}
 	}
 
@@ -616,12 +589,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 	g.logger.Log(ctx, level, "build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
 		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
-	for _, s := range g.sinks {
-		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
-			g.logger.Error("failed to write build logs to sink",
-				"sink", s.Name(), "deployment_id", deploymentID, "error", sinkErr)
-		}
-	}
+	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
 
 func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
@@ -700,20 +668,10 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 	}
 
 	if !covStart.IsZero() {
-		coverageKey := CoverageKey(deploymentID, CoverageTypeLogHTTP)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr == nil {
-			kind := CoverageCollected
-			if len(entries) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start: covStart, End: covEnd, Kind: kind,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save HTTP log coverage",
-					"deployment_id", deploymentID, "error", saveErr)
-			}
+		covKey := CoverageKey(deploymentID, CoverageTypeLogHTTP)
+		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+			g.logger.Warn("failed to update HTTP log coverage",
+				"deployment_id", deploymentID, "error", covErr)
 		}
 	}
 
@@ -724,10 +682,5 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 	g.logger.Log(ctx, level, "HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
 		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
-	for _, s := range g.sinks {
-		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
-			g.logger.Error("failed to write HTTP logs to sink",
-				"sink", s.Name(), "deployment_id", deploymentID, "error", sinkErr)
-		}
-	}
+	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }

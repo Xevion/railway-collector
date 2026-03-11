@@ -19,7 +19,9 @@ import (
 
 func TestServiceMetricsGenerator_Type(t *testing.T) {
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Logger: slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Logger: slog.Default(),
+		},
 	})
 	assert.Equal(t, collector.TaskTypeMetrics, gen.Type())
 }
@@ -41,17 +43,19 @@ func TestServiceMetricsGenerator_Poll_EmitsItemsPerServiceEnv(t *testing.T) {
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
-		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:      30,
-		AvgWindow:       30,
-		Interval:        30 * time.Second,
-		MetricRetention: 1 * time.Hour,
-		ChunkSize:       6 * time.Hour,
-		MaxItemsPerPoll: 10,
-		Logger:          slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Discovery:       targets,
+			Store:           store,
+			Clock:           fakeClock,
+			Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+			SampleRate:      30,
+			AvgWindow:       30,
+			Interval:        30 * time.Second,
+			MetricRetention: 1 * time.Hour,
+			ChunkSize:       6 * time.Hour,
+			MaxItemsPerPoll: 10,
+			Logger:          slog.Default(),
+		},
 	})
 
 	items := gen.Poll(now)
@@ -86,16 +90,18 @@ func TestServiceMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Clock:           fakeClock,
-		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:      30,
-		AvgWindow:       30,
-		Interval:        30 * time.Second,
-		MetricRetention: 1 * time.Hour,
-		MaxItemsPerPoll: 10,
-		Logger:          slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Discovery:       targets,
+			Store:           store,
+			Clock:           fakeClock,
+			Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+			SampleRate:      30,
+			AvgWindow:       30,
+			Interval:        30 * time.Second,
+			MetricRetention: 1 * time.Hour,
+			MaxItemsPerPoll: 10,
+			Logger:          slog.Default(),
+		},
 	})
 
 	// First poll should return items
@@ -141,16 +147,18 @@ func TestServiceMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	}
 
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Discovery:       targets,
-		Store:           store,
-		Sinks:           []sink.Sink{fakeSink},
-		Clock:           fakeClock,
-		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:      30,
-		AvgWindow:       30,
-		Interval:        30 * time.Second,
-		MetricRetention: 1 * time.Hour,
-		Logger:          slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Discovery:       targets,
+			Store:           store,
+			Sinks:           []sink.Sink{fakeSink},
+			Clock:           fakeClock,
+			Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+			SampleRate:      30,
+			AvgWindow:       30,
+			Interval:        30 * time.Second,
+			MetricRetention: 1 * time.Hour,
+			Logger:          slog.Default(),
+		},
 	})
 
 	rawData := []map[string]any{
@@ -206,11 +214,13 @@ func TestServiceMetricsGenerator_Deliver_HandlesError(t *testing.T) {
 	fakeSink := &recordingSink{}
 
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Discovery: targets,
-		Sinks:     []sink.Sink{fakeSink},
-		Clock:     fakeClock,
-		Interval:  30 * time.Second,
-		Logger:    slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Discovery: targets,
+			Sinks:     []sink.Sink{fakeSink},
+			Clock:     fakeClock,
+			Interval:  30 * time.Second,
+			Logger:    slog.Default(),
+		},
 	})
 
 	item := collector.WorkItem{
@@ -304,17 +314,19 @@ func TestServiceMetricsGenerator_Poll_GapChunking(t *testing.T) {
 			store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 			gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-				Discovery:       targets,
-				Store:           store,
-				Clock:           fakeClock,
-				Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-				SampleRate:      30,
-				AvgWindow:       30,
-				Interval:        30 * time.Second,
-				MetricRetention: tt.retention,
-				ChunkSize:       tt.chunkSize,
-				MaxItemsPerPoll: tt.maxItems,
-				Logger:          slog.Default(),
+				BaseMetricsConfig: collector.BaseMetricsConfig{
+					Discovery:       targets,
+					Store:           store,
+					Clock:           fakeClock,
+					Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+					SampleRate:      30,
+					AvgWindow:       30,
+					Interval:        30 * time.Second,
+					MetricRetention: tt.retention,
+					ChunkSize:       tt.chunkSize,
+					MaxItemsPerPoll: tt.maxItems,
+					Logger:          slog.Default(),
+				},
 			})
 
 			items := gen.Poll(now)
@@ -356,11 +368,13 @@ func TestServiceMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
 	gen := collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
-		Discovery: targets,
-		Store:     store,
-		Clock:     fakeClock,
-		Interval:  30 * time.Second,
-		Logger:    slog.Default(),
+		BaseMetricsConfig: collector.BaseMetricsConfig{
+			Discovery: targets,
+			Store:     store,
+			Clock:     fakeClock,
+			Interval:  30 * time.Second,
+			Logger:    slog.Default(),
+		},
 	})
 
 	data, _ := json.Marshal([]map[string]any{})

@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-
-	"github.com/jonboulle/clockwork"
 
 	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
@@ -26,18 +23,7 @@ type rawReplicaMetricsResult struct {
 
 // ReplicaMetricsGeneratorConfig configures a ReplicaMetricsGenerator.
 type ReplicaMetricsGeneratorConfig struct {
-	Discovery       TargetProvider
-	Store           StateStore
-	Sinks           []sink.Sink
-	Clock           clockwork.Clock
-	Measurements    []railway.MetricMeasurement
-	SampleRate      int
-	AvgWindow       int
-	Interval        time.Duration // minimum time between polls (e.g. 30s)
-	MetricRetention time.Duration // how far back to scan for gaps (e.g. 90 days)
-	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
-	MaxItemsPerPoll int           // max work items to emit per poll
-	Logger          *slog.Logger
+	BaseMetricsConfig
 }
 
 // ReplicaMetricsGenerator implements TaskGenerator for per-replica metrics
@@ -45,54 +31,18 @@ type ReplicaMetricsGeneratorConfig struct {
 // pair and emits WorkItems targeting the replicaMetrics endpoint, which returns
 // per-replica CPU and memory data.
 type ReplicaMetricsGenerator struct {
-	discovery       TargetProvider
-	store           StateStore
-	sinks           []sink.Sink
-	clock           clockwork.Clock
-	measurements    []railway.MetricMeasurement
-	sampleRate      int
-	avgWindow       int
-	interval        time.Duration
-	metricRetention time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	logger          *slog.Logger
-
-	nextPoll time.Time // earliest time to emit items again
+	baseMetrics
 }
 
 // NewReplicaMetricsGenerator creates a ReplicaMetricsGenerator.
 func NewReplicaMetricsGenerator(cfg ReplicaMetricsGeneratorConfig) *ReplicaMetricsGenerator {
-	measurements := cfg.Measurements
-	if len(measurements) == 0 {
-		measurements = []railway.MetricMeasurement{
-			railway.MetricMeasurementCpuUsage,
-			railway.MetricMeasurementMemoryUsageGb,
-		}
-	}
-	if cfg.MetricRetention == 0 {
-		cfg.MetricRetention = 90 * 24 * time.Hour
-	}
-	if cfg.ChunkSize == 0 {
-		cfg.ChunkSize = 6 * time.Hour
-	}
-	if cfg.MaxItemsPerPoll == 0 {
-		cfg.MaxItemsPerPoll = 10
-	}
+	measurements := applyConfigDefaults(&cfg.BaseMetricsConfig, []railway.MetricMeasurement{
+		railway.MetricMeasurementCpuUsage,
+		railway.MetricMeasurementMemoryUsageGb,
+	})
 
 	return &ReplicaMetricsGenerator{
-		discovery:       cfg.Discovery,
-		store:           cfg.Store,
-		sinks:           cfg.Sinks,
-		clock:           cfg.Clock,
-		measurements:    measurements,
-		sampleRate:      cfg.SampleRate,
-		avgWindow:       cfg.AvgWindow,
-		interval:        cfg.Interval,
-		metricRetention: cfg.MetricRetention,
-		chunkSize:       cfg.ChunkSize,
-		maxItemsPerPoll: cfg.MaxItemsPerPoll,
-		logger:          cfg.Logger,
+		baseMetrics: newBaseMetrics(cfg.BaseMetricsConfig, measurements),
 	}
 }
 
@@ -103,28 +53,6 @@ func (g *ReplicaMetricsGenerator) Type() TaskType {
 
 // NextPoll returns the earliest time this generator will produce work.
 func (g *ReplicaMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
-
-// metricsBatchKey computes the batch key from shared query parameters.
-// Items with the same batch key can be merged into one aliased request.
-func (g *ReplicaMetricsGenerator) metricsBatchKey() string {
-	var parts []string
-	for _, m := range g.measurements {
-		parts = append(parts, string(m))
-	}
-	return fmt.Sprintf("sr=%d,aw=%d,m=%s", g.sampleRate, g.avgWindow, strings.Join(parts, "+"))
-}
-
-// metricsBatchKeyChunk computes a batch key for a chunked (older gap) query.
-// Includes chunk boundaries so that items for the same time window can be merged.
-func (g *ReplicaMetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time.Time) string {
-	var parts []string
-	for _, m := range g.measurements {
-		parts = append(parts, string(m))
-	}
-	return fmt.Sprintf("sr=%d,aw=%d,m=%s,s=%s,e=%s",
-		g.sampleRate, g.avgWindow, strings.Join(parts, "+"),
-		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
-}
 
 // Poll scans coverage gaps for all unique service+environment pairs,
 // prioritizes by recency (live edge first), and returns WorkItems targeting
@@ -199,7 +127,7 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 							Kind:     QueryReplicaMetrics,
 							TaskType: TaskTypeMetrics,
 							AliasKey: compositeKey,
-							BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
+							BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
 							Params: map[string]any{
 								"serviceId":              target.ServiceID,
 								"environmentId":          target.EnvironmentID,
@@ -224,7 +152,7 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 					Kind:     QueryReplicaMetrics,
 					TaskType: TaskTypeMetrics,
 					AliasKey: compositeKey,
-					BatchKey: g.metricsBatchKey(),
+					BatchKey: metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow),
 					Params: map[string]any{
 						"serviceId":              target.ServiceID,
 						"environmentId":          target.EnvironmentID,
@@ -247,7 +175,7 @@ func (g *ReplicaMetricsGenerator) Poll(now time.Time) []WorkItem {
 						Kind:     QueryReplicaMetrics,
 						TaskType: TaskTypeMetrics,
 						AliasKey: compositeKey,
-						BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
+						BatchKey: metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End),
 						Params: map[string]any{
 							"serviceId":              target.ServiceID,
 							"environmentId":          target.EnvironmentID,
@@ -279,26 +207,13 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
 
-	parts := strings.SplitN(compositeKey, ":", 2)
-	serviceID := parts[0]
-	environmentID := ""
-	if len(parts) > 1 {
-		environmentID = parts[1]
-	}
-
-	serviceName := ""
-	environmentName := ""
-	projectName := ""
-	projectID := ""
-	for _, t := range targets {
-		if t.ServiceID == serviceID && t.EnvironmentID == environmentID {
-			serviceName = t.ServiceName
-			environmentName = t.EnvironmentName
-			projectName = t.ProjectName
-			projectID = t.ProjectID
-			break
-		}
-	}
+	info := parseCompositeKey(compositeKey, targets)
+	serviceID := info.serviceID
+	environmentID := info.environmentID
+	serviceName := info.serviceName
+	environmentName := info.environmentName
+	projectName := info.projectName
+	projectID := info.projectID
 
 	if err != nil {
 		g.logger.Error("replica metrics delivery failed",
@@ -330,30 +245,12 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 
 	// Update coverage
 	if !startTime.IsZero() {
-		coverageKey := CoverageKey(compositeKey, CoverageTypeReplicaMetric)
-		existing, covErr := LoadCoverage(g.store, coverageKey)
-		if covErr != nil {
-			g.logger.Warn("failed to load replica metric coverage",
+		covKey := CoverageKey(compositeKey, CoverageTypeReplicaMetric)
+		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
+			g.logger.Warn("failed to update replica metric coverage",
 				"service", serviceName, "service_id", serviceID,
 				"environment", environmentName, "environment_id", environmentID,
 				"error", covErr)
-		} else {
-			kind := CoverageCollected
-			if len(results) == 0 {
-				kind = CoverageEmpty
-			}
-			updated := InsertInterval(existing, CoverageInterval{
-				Start:      startTime,
-				End:        endTime,
-				Kind:       kind,
-				Resolution: g.sampleRate,
-			})
-			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-				g.logger.Warn("failed to save replica metric coverage",
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", saveErr)
-			}
 		}
 	}
 
@@ -410,15 +307,5 @@ func (g *ReplicaMetricsGenerator) Deliver(ctx context.Context, item WorkItem, da
 	)
 
 	// Write to sinks
-	if len(points) > 0 {
-		for _, s := range g.sinks {
-			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-				g.logger.Error("failed to write replica metrics to sink",
-					"sink", s.Name(),
-					"service", serviceName, "service_id", serviceID,
-					"environment", environmentName, "environment_id", environmentID,
-					"error", sinkErr)
-			}
-		}
-	}
+	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
 }
