@@ -196,14 +196,7 @@ func DispatchRequestResults(
 
 		data, exists := resp.Data[alias]
 		if !exists {
-			var aliasErr error
-			for _, gqlErr := range resp.Errors {
-				if len(gqlErr.Path) > 0 && gqlErr.Path[0] == alias {
-					aliasErr = fmt.Errorf("GraphQL error: %s", gqlErr.Message)
-					break
-				}
-			}
-			if aliasErr != nil {
+			if aliasErr := findAliasError(resp.Errors, alias); aliasErr != nil {
 				gen.Deliver(ctx, frag.Item, nil, aliasErr)
 			} else {
 				gen.Deliver(ctx, frag.Item, nil, fmt.Errorf("alias %q not found in response", alias))
@@ -212,14 +205,7 @@ func DispatchRequestResults(
 		}
 
 		if string(data) == "null" {
-			var aliasErr error
-			for _, gqlErr := range resp.Errors {
-				if len(gqlErr.Path) > 0 && gqlErr.Path[0] == alias {
-					aliasErr = fmt.Errorf("GraphQL error: %s", gqlErr.Message)
-					break
-				}
-			}
-			if aliasErr != nil {
+			if aliasErr := findAliasError(resp.Errors, alias); aliasErr != nil {
 				gen.Deliver(ctx, frag.Item, nil, aliasErr)
 				continue
 			}
@@ -227,4 +213,15 @@ func DispatchRequestResults(
 
 		gen.Deliver(ctx, frag.Item, json.RawMessage(data), nil)
 	}
+}
+
+// findAliasError searches GraphQL errors for the first error whose path
+// matches the given alias. Returns nil if no match is found.
+func findAliasError(errors []railway.GraphQLError, alias string) error {
+	for _, gqlErr := range errors {
+		if len(gqlErr.Path) > 0 && gqlErr.Path[0] == alias {
+			return fmt.Errorf("GraphQL error: %s", gqlErr.Message)
+		}
+	}
+	return nil
 }
