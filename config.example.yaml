@@ -29,8 +29,6 @@ collect:
     sample_rate_seconds: 60
     # Smoothing window for CPU metrics (seconds).
     averaging_window_seconds: 60
-    # How far back each scrape looks. Should be >= interval.
-    lookback: 10m
 
   logs:
     enabled: true
@@ -59,6 +57,31 @@ collect:
     # Random jitter applied to TTLs: actual TTL = base +/- jitter.
     # Spreads API calls over time to avoid burst patterns.
     jitter: 15m
+
+  # Gap-filling settings. Metrics and logs generators automatically scan
+  # coverage gaps and fill them on their regular polling cycles.
+  backfill:
+    # Chunk size for historical metric gap queries.
+    metric_chunk_size: 240h   # 10 days
+    # How far back to look for metric gaps.
+    metric_retention: 2160h   # 90 days
+    # How far back to look for log gaps.
+    log_retention: 120h       # 5 days
+    # Max work items per generator poll cycle.
+    max_items_per_poll: 10
+
+  # Credit-based rate limiting across task types.
+  # credits:
+  #   metrics_rate: 8.0      # credits/min for metrics
+  #   logs_rate: 6.0         # credits/min for logs
+  #   discovery_rate: 1.0    # credits/min for discovery
+  #   max_credits: 4.0       # burst cap per type
+
+  # Scheduler tuning (defaults are usually fine).
+  # scheduler:
+  #   tick_interval: 1s
+  #   max_rps: 0.267         # ~16 requests/min
+  #   drain_timeout: 5s
 
 # Filters control which Railway resources are collected.
 # Empty lists mean "collect everything". Entries can be exact names, IDs, or regex.

@@ -245,18 +245,18 @@ func TestFindGaps(t *testing.T) {
 	}
 }
 
-func TestPrioritizeGaps_OlderFirst(t *testing.T) {
+func TestPrioritizeGaps_RecentFirst(t *testing.T) {
 	now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
 	retentionLimit := now.Add(-90 * 24 * time.Hour)
 
 	gaps := []collector.TimeRange{
-		{Start: now.Add(-1 * time.Hour), End: now},                                         // recent
+		{Start: now.Add(-1 * time.Hour), End: now},                                         // recent (live edge)
 		{Start: retentionLimit.Add(1 * time.Hour), End: retentionLimit.Add(3 * time.Hour)}, // old, near expiry
 	}
 
 	prioritized := collector.PrioritizeGaps(gaps, now)
-	// Older gap (near retention expiry) should rank first
-	assert.Equal(t, gaps[1].Start, prioritized[0].Start)
+	// Recent gap (live edge) should rank first with recency-based scoring
+	assert.Equal(t, gaps[0].Start, prioritized[0].Start)
 }
 
 func TestInsertInterval_MergesWithExisting(t *testing.T) {

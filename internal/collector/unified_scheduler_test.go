@@ -113,7 +113,7 @@ func TestUnifiedScheduler_ExecutesBatchedMetrics(t *testing.T) {
 	aliasA := railway.SanitizeAlias("proj-a")
 	aliasB := railway.SanitizeAlias("proj-b")
 
-	api.EXPECT().RawQuery(gomock.Any(), "BatchMetrics", gomock.Any(), gomock.Any()).
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
 			return &railway.RawQueryResponse{
 				Data: map[string]json.RawMessage{
@@ -253,7 +253,7 @@ func TestUnifiedScheduler_DiscoverySpecialCase(t *testing.T) {
 	// gomock verifies Refresh was called exactly once (not RawQuery).
 }
 
-func TestUnifiedScheduler_PriorityOrder(t *testing.T) {
+func TestUnifiedScheduler_MixedTypeBatching(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	api := mocks.NewMockRailwayAPI(ctrl)
 	fakeClock := clockwork.NewFakeClock()
@@ -275,31 +275,31 @@ func TestUnifiedScheduler_PriorityOrder(t *testing.T) {
 		},
 	}
 
-	backfillGen := &stubGenerator{
-		taskType: collector.TaskTypeBackfill,
+	logsGen := &stubGenerator{
+		taskType: collector.TaskTypeLogs,
 		pollItems: []collector.WorkItem{
 			{
-				ID: "backfill:proj-b", Kind: collector.QueryMetrics,
-				TaskType: collector.TaskTypeBackfill, AliasKey: "proj-b",
-				BatchKey: "sr=300",
+				ID: "envlogs:env-a", Kind: collector.QueryEnvironmentLogs,
+				TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+				BatchKey: "limit=500",
 				Params: map[string]any{
-					"startDate":         "2024-01-01T00:00:00Z",
-					"measurements":      []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":           []railway.MetricTag{},
-					"sampleRateSeconds": 300,
+					"afterDate":  "2024-01-01T00:00:00Z",
+					"afterLimit": 500,
 				},
 			},
 		},
 	}
 
 	aliasA := railway.SanitizeAlias("proj-a")
+	envAlias := railway.SanitizeAlias("env-a")
 
-	// Metrics batch fires first (higher priority).
-	api.EXPECT().RawQuery(gomock.Any(), "BatchMetrics", gomock.Any(), gomock.Any()).
+	// Both metrics and logs should be packed into one request.
+	api.EXPECT().RawQuery(gomock.Any(), "Batch", gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, _, _ string, _ map[string]any) (*railway.RawQueryResponse, error) {
 			return &railway.RawQueryResponse{
 				Data: map[string]json.RawMessage{
-					aliasA: json.RawMessage(`[]`),
+					aliasA:   json.RawMessage(`[]`),
+					envAlias: json.RawMessage(`[]`),
 				},
 			}, nil
 		}).Times(1)
@@ -312,7 +312,7 @@ func TestUnifiedScheduler_PriorityOrder(t *testing.T) {
 		Clock:        fakeClock,
 		API:          api,
 		Credits:      credits,
-		Generators:   []collector.TaskGenerator{metricsGen, backfillGen},
+		Generators:   []collector.TaskGenerator{metricsGen, logsGen},
 		Logger:       slog.Default(),
 		TickInterval: 100 * time.Millisecond,
 		MaxRPS:       100.0,
@@ -326,13 +326,13 @@ func TestUnifiedScheduler_PriorityOrder(t *testing.T) {
 	fakeClock.BlockUntil(1)
 	fakeClock.Advance(200 * time.Millisecond)
 
-	// Wait for metrics delivery.
+	// Both metrics and logs should be delivered in one tick.
 	metricsDeliveries := metricsGen.waitForDeliveries(t, 1, 2*time.Second)
-	assert.Len(t, metricsDeliveries, 1, "metrics should be selected first")
-
-	// Backfill should not have been delivered in the same tick.
-	backfillDeliveries := backfillGen.getDeliveries()
-	assert.Empty(t, backfillDeliveries, "backfill should wait")
+	logDeliveries := logsGen.waitForDeliveries(t, 1, 2*time.Second)
+	assert.Len(t, metricsDeliveries, 1)
+	assert.Len(t, logDeliveries, 1)
+	assert.Nil(t, metricsDeliveries[0].Err)
+	assert.Nil(t, logDeliveries[0].Err)
 
 	cancel()
 }

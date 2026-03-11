@@ -10,6 +10,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/railway"
 	"github.com/xevion/railway-collector/internal/sink"
 )
@@ -72,31 +73,36 @@ type rawMetricValue struct {
 
 // MetricsGeneratorConfig configures a MetricsGenerator.
 type MetricsGeneratorConfig struct {
-	Discovery    TargetProvider
-	Store        StateStore
-	Sinks        []sink.Sink
-	Clock        clockwork.Clock
-	Measurements []railway.MetricMeasurement
-	SampleRate   int
-	AvgWindow    int
-	Lookback     time.Duration
-	Interval     time.Duration // minimum time between polls (e.g. 30s)
-	Logger       *slog.Logger
+	Discovery       TargetProvider
+	Store           StateStore
+	Sinks           []sink.Sink
+	Clock           clockwork.Clock
+	Measurements    []railway.MetricMeasurement
+	SampleRate      int
+	AvgWindow       int
+	Interval        time.Duration // minimum time between polls (e.g. 30s)
+	MetricRetention time.Duration // how far back to scan for gaps (e.g. 90 days)
+	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
+	MaxItemsPerPoll int           // max work items to emit per poll
+	Logger          *slog.Logger
 }
 
 // MetricsGenerator implements TaskGenerator for metrics collection.
-// It emits one WorkItem per project on each poll cycle.
+// It scans coverage gaps each poll, prioritizes by recency (live edge first),
+// and emits chunked WorkItems for older gaps and open-ended items for the live edge.
 type MetricsGenerator struct {
-	discovery    TargetProvider
-	store        StateStore
-	sinks        []sink.Sink
-	clock        clockwork.Clock
-	measurements []railway.MetricMeasurement
-	sampleRate   int
-	avgWindow    int
-	lookback     time.Duration
-	interval     time.Duration
-	logger       *slog.Logger
+	discovery       TargetProvider
+	store           StateStore
+	sinks           []sink.Sink
+	clock           clockwork.Clock
+	measurements    []railway.MetricMeasurement
+	sampleRate      int
+	avgWindow       int
+	interval        time.Duration
+	metricRetention time.Duration
+	chunkSize       time.Duration
+	maxItemsPerPoll int
+	logger          *slog.Logger
 
 	nextPoll time.Time // earliest time to emit items again
 }
@@ -113,18 +119,29 @@ func NewMetricsGenerator(cfg MetricsGeneratorConfig) *MetricsGenerator {
 			railway.MetricMeasurementDiskUsageGb,
 		}
 	}
+	if cfg.MetricRetention == 0 {
+		cfg.MetricRetention = 90 * 24 * time.Hour
+	}
+	if cfg.ChunkSize == 0 {
+		cfg.ChunkSize = 6 * time.Hour
+	}
+	if cfg.MaxItemsPerPoll == 0 {
+		cfg.MaxItemsPerPoll = 10
+	}
 
 	return &MetricsGenerator{
-		discovery:    cfg.Discovery,
-		store:        cfg.Store,
-		sinks:        cfg.Sinks,
-		clock:        cfg.Clock,
-		measurements: measurements,
-		sampleRate:   cfg.SampleRate,
-		avgWindow:    cfg.AvgWindow,
-		lookback:     cfg.Lookback,
-		interval:     cfg.Interval,
-		logger:       cfg.Logger,
+		discovery:       cfg.Discovery,
+		store:           cfg.Store,
+		sinks:           cfg.Sinks,
+		clock:           cfg.Clock,
+		measurements:    measurements,
+		sampleRate:      cfg.SampleRate,
+		avgWindow:       cfg.AvgWindow,
+		interval:        cfg.Interval,
+		metricRetention: cfg.MetricRetention,
+		chunkSize:       cfg.ChunkSize,
+		maxItemsPerPoll: cfg.MaxItemsPerPoll,
+		logger:          cfg.Logger,
 	}
 }
 
@@ -146,8 +163,45 @@ func (g *MetricsGenerator) metricsBatchKey() string {
 	return fmt.Sprintf("sr=%d,aw=%d,m=%s", g.sampleRate, g.avgWindow, strings.Join(parts, "+"))
 }
 
-// Poll returns one WorkItem per project that needs metrics fetched.
-// Returns nil if the poll interval hasn't elapsed or there are no targets.
+// metricsBatchKeyChunk computes a batch key for a chunked (older gap) query.
+// Includes chunk boundaries so that items for the same time window can be merged.
+func (g *MetricsGenerator) metricsBatchKeyChunk(chunkStart, chunkEnd time.Time) string {
+	var parts []string
+	for _, m := range g.measurements {
+		parts = append(parts, string(m))
+	}
+	return fmt.Sprintf("sr=%d,aw=%d,m=%s,s=%s,e=%s",
+		g.sampleRate, g.avgWindow, strings.Join(parts, "+"),
+		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
+}
+
+// alignToChunkBoundary truncates t down to the nearest chunk boundary.
+func alignToChunkBoundary(t time.Time, chunkSize time.Duration) time.Time {
+	unix := t.Unix()
+	chunkSec := int64(chunkSize.Seconds())
+	return time.Unix(unix-unix%chunkSec, 0).UTC()
+}
+
+// alignedChunks splits a gap into chunks aligned to fixed boundaries.
+func alignedChunks(gap TimeRange, chunkSize time.Duration) []TimeRange {
+	alignedStart := alignToChunkBoundary(gap.Start, chunkSize)
+
+	var chunks []TimeRange
+	cursor := alignedStart
+	for cursor.Before(gap.End) {
+		end := cursor.Add(chunkSize)
+		if end.After(gap.End) {
+			end = gap.End
+		}
+		chunks = append(chunks, TimeRange{Start: cursor, End: end})
+		cursor = cursor.Add(chunkSize)
+	}
+	return chunks
+}
+
+// Poll scans coverage gaps for all projects, prioritizes by recency (live edge
+// first), and returns WorkItems. The live edge gets an open-ended query (no
+// endDate); older gaps are chunked into fixed intervals for batching.
 func (g *MetricsGenerator) Poll(now time.Time) []WorkItem {
 	if now.Before(g.nextPoll) {
 		return nil
@@ -159,8 +213,7 @@ func (g *MetricsGenerator) Poll(now time.Time) []WorkItem {
 	}
 
 	projectIDs := uniqueProjectIDs(targets)
-	fallbackStart := now.Add(-g.lookback)
-	batchKey := g.metricsBatchKey()
+	retentionStart := now.Add(-g.metricRetention)
 
 	groupBy := []railway.MetricTag{
 		railway.MetricTagServiceId,
@@ -169,35 +222,103 @@ func (g *MetricsGenerator) Poll(now time.Time) []WorkItem {
 	}
 
 	var items []WorkItem
+	itemCount := 0
+
 	for _, pid := range projectIDs {
-		startTime := g.store.GetMetricCursor(pid)
-		if startTime.IsZero() || startTime.Before(fallbackStart) {
-			startTime = fallbackStart
+		if itemCount >= g.maxItemsPerPoll {
+			break
 		}
 
-		items = append(items, WorkItem{
-			ID:       "metrics:" + pid,
-			Kind:     QueryMetrics,
-			TaskType: TaskTypeMetrics,
-			AliasKey: pid,
-			BatchKey: batchKey,
-			Params: map[string]any{
-				"startDate":              startTime.Format(time.RFC3339),
-				"measurements":           g.measurements,
-				"groupBy":                groupBy,
-				"sampleRateSeconds":      g.sampleRate,
-				"averagingWindowSeconds": g.avgWindow,
-			},
-		})
+		coverageKey := CoverageKey(pid, "metric")
+		existing, err := LoadCoverage(g.store, coverageKey)
+		if err != nil {
+			g.logger.Warn("failed to load metric coverage",
+				"project_id", pid, "error", err)
+			continue
+		}
+
+		gaps := FindGaps(existing, retentionStart, now)
+		if len(gaps) == 0 {
+			continue
+		}
+
+		var totalGapDuration time.Duration
+		for _, gap := range gaps {
+			totalGapDuration += gap.End.Sub(gap.Start)
+		}
+		g.logger.Debug("metric coverage gaps found",
+			"project_id", pid,
+			"gaps", len(gaps),
+			"total_gap_duration", totalGapDuration,
+			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+		)
+
+		prioritized := PrioritizeGaps(gaps, now)
+
+		for _, gap := range prioritized {
+			if itemCount >= g.maxItemsPerPoll {
+				break
+			}
+
+			// Live edge: gap ends at or near "now" (within 1 minute)
+			isLiveEdge := now.Sub(gap.End) < time.Minute
+
+			if isLiveEdge {
+				// Open-ended query: no endDate, captures data up to "now"
+				items = append(items, WorkItem{
+					ID:       fmt.Sprintf("metrics:%s:%s", pid, gap.Start.Format(time.RFC3339)),
+					Kind:     QueryMetrics,
+					TaskType: TaskTypeMetrics,
+					AliasKey: pid,
+					BatchKey: g.metricsBatchKey(),
+					Params: map[string]any{
+						"startDate":              gap.Start.Format(time.RFC3339),
+						"measurements":           g.measurements,
+						"groupBy":                groupBy,
+						"sampleRateSeconds":      g.sampleRate,
+						"averagingWindowSeconds": g.avgWindow,
+					},
+				})
+				itemCount++
+			} else {
+				// Older gap: chunk into fixed intervals for batching
+				chunks := alignedChunks(gap, g.chunkSize)
+				for _, chunk := range chunks {
+					if itemCount >= g.maxItemsPerPoll {
+						break
+					}
+
+					items = append(items, WorkItem{
+						ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
+						Kind:     QueryMetrics,
+						TaskType: TaskTypeMetrics,
+						AliasKey: pid,
+						BatchKey: g.metricsBatchKeyChunk(chunk.Start, chunk.End),
+						Params: map[string]any{
+							"startDate":              chunk.Start.Format(time.RFC3339),
+							"endDate":                chunk.End.Format(time.RFC3339),
+							"measurements":           g.measurements,
+							"groupBy":                groupBy,
+							"sampleRateSeconds":      g.sampleRate,
+							"averagingWindowSeconds": g.avgWindow,
+						},
+					})
+					itemCount++
+				}
+			}
+		}
 	}
 
-	g.nextPoll = now.Add(g.interval)
+	if len(items) > 0 {
+		g.nextPoll = now.Add(g.interval)
+	}
+
 	return items
 }
 
 // Deliver processes the raw metrics JSON response for a single project.
 // It transforms the data into MetricPoints, writes to sinks, and updates
-// cursors and coverage.
+// coverage. Coverage is the single source of truth (no cursors).
 func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json.RawMessage, err error) {
 	projectID := item.AliasKey
 	now := g.clock.Now().UTC()
@@ -224,38 +345,40 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 		return
 	}
 
-	// Update cursor to current time
-	if cursorErr := g.store.SetMetricCursor(projectID, now); cursorErr != nil {
-		g.logger.Error("failed to persist metric cursor",
-			"project", projectName, "project_id", projectID, "error", cursorErr)
+	// Determine coverage interval from params
+	startDateStr, _ := item.Params["startDate"].(string)
+	startTime, _ := time.Parse(time.RFC3339, startDateStr)
+
+	// End time: use endDate if present (chunked gap), otherwise use now (live edge)
+	endTime := now
+	if endDateStr, ok := item.Params["endDate"].(string); ok {
+		if parsed, parseErr := time.Parse(time.RFC3339, endDateStr); parseErr == nil {
+			endTime = parsed
+		}
 	}
 
 	// Update coverage
-	startDateStr, _ := item.Params["startDate"].(string)
-	startTime, _ := time.Parse(time.RFC3339, startDateStr)
-	if startTime.IsZero() {
-		startTime = now.Add(-g.lookback)
-	}
-
-	coverageKey := CoverageKey(projectID, "metric")
-	existing, covErr := LoadCoverage(g.store, coverageKey)
-	if covErr != nil {
-		g.logger.Warn("failed to load metric coverage",
-			"project", projectName, "project_id", projectID, "error", covErr)
-	} else {
-		kind := CoverageCollected
-		if len(results) == 0 {
-			kind = CoverageEmpty
-		}
-		updated := InsertInterval(existing, CoverageInterval{
-			Start:      startTime,
-			End:        now,
-			Kind:       kind,
-			Resolution: g.sampleRate,
-		})
-		if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-			g.logger.Warn("failed to save metric coverage",
-				"project", projectName, "project_id", projectID, "error", saveErr)
+	if !startTime.IsZero() {
+		coverageKey := CoverageKey(projectID, "metric")
+		existing, covErr := LoadCoverage(g.store, coverageKey)
+		if covErr != nil {
+			g.logger.Warn("failed to load metric coverage",
+				"project", projectName, "project_id", projectID, "error", covErr)
+		} else {
+			kind := CoverageCollected
+			if len(results) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start:      startTime,
+				End:        endTime,
+				Kind:       kind,
+				Resolution: g.sampleRate,
+			})
+			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
+				g.logger.Warn("failed to save metric coverage",
+					"project", projectName, "project_id", projectID, "error", saveErr)
+			}
 		}
 	}
 
@@ -273,20 +396,31 @@ func (g *MetricsGenerator) Deliver(ctx context.Context, item WorkItem, data json
 				Labels:    labels,
 			})
 		}
+
+		g.logger.Log(ctx, logging.LevelTrace, "metric series",
+			"measurement", result.Measurement,
+			"points", len(result.Values),
+			"project_id", projectID,
+		)
 	}
 
-	g.logger.Debug("metrics delivered",
+	level := slog.LevelDebug
+	if len(points) == 0 {
+		level = logging.LevelTrace
+	}
+	g.logger.Log(ctx, level, "metrics delivered",
 		"project", projectName, "project_id", projectID,
 		"series", len(results), "points", len(points),
-		"start", startTime.Format(time.RFC3339),
-		"end", now.Format(time.RFC3339),
+		"start", startDateStr, "end", endTime.Format(time.RFC3339),
 	)
 
 	// Write to sinks
-	for _, s := range g.sinks {
-		if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
-			g.logger.Error("failed to write metrics to sink",
-				"sink", s.Name(), "project", projectName, "project_id", projectID, "error", sinkErr)
+	if len(points) > 0 {
+		for _, s := range g.sinks {
+			if sinkErr := s.WriteMetrics(ctx, points); sinkErr != nil {
+				g.logger.Error("failed to write metrics to sink",
+					"sink", s.Name(), "project", projectName, "project_id", projectID, "error", sinkErr)
+			}
 		}
 	}
 }

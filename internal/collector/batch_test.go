@@ -3,6 +3,7 @@ package collector_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,216 +14,219 @@ import (
 	"github.com/xevion/railway-collector/internal/railway"
 )
 
-func TestGroupByCompatibility_GroupsByKindAndBatchKey(t *testing.T) {
-	items := []collector.WorkItem{
-		{ID: "m1", Kind: collector.QueryMetrics, TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a", BatchKey: "sr=30"},
-		{ID: "m2", Kind: collector.QueryMetrics, TaskType: collector.TaskTypeMetrics, AliasKey: "proj-b", BatchKey: "sr=30"},
-		{ID: "l1", Kind: collector.QueryEnvironmentLogs, TaskType: collector.TaskTypeLogs, AliasKey: "env-a", BatchKey: "limit=100"},
-		{ID: "l2", Kind: collector.QueryBuildLogs, TaskType: collector.TaskTypeLogs, AliasKey: "dep-a", BatchKey: "limit=100"},
-	}
-
-	batches := collector.GroupByCompatibility(items)
-
-	// Should produce 3 batches: metrics (2 items), env logs (1), build logs (1)
-	require.Len(t, batches, 3)
-
-	// Sorted by priority: Metrics first, then Logs batches
-	assert.Equal(t, collector.QueryMetrics, batches[0].Kind)
-	assert.Len(t, batches[0].Items, 2)
-	assert.Equal(t, collector.TaskTypeMetrics, batches[0].TaskType)
-
-	// The two logs batches (different Kind, same TaskType)
-	assert.Equal(t, collector.TaskTypeLogs, batches[1].TaskType)
-	assert.Equal(t, collector.TaskTypeLogs, batches[2].TaskType)
-}
-
-func TestGroupByCompatibility_SortsHighPriorityFirst(t *testing.T) {
-	items := []collector.WorkItem{
-		{ID: "b1", Kind: collector.QueryMetrics, TaskType: collector.TaskTypeBackfill, AliasKey: "proj-a", BatchKey: "bf"},
-		{ID: "d1", Kind: collector.QueryDiscovery, TaskType: collector.TaskTypeDiscovery, AliasKey: "disc", BatchKey: "disc"},
-		{ID: "m1", Kind: collector.QueryMetrics, TaskType: collector.TaskTypeMetrics, AliasKey: "proj-b", BatchKey: "sr=30"},
-		{ID: "l1", Kind: collector.QueryEnvironmentLogs, TaskType: collector.TaskTypeLogs, AliasKey: "env-a", BatchKey: "limit=100"},
-	}
-
-	batches := collector.GroupByCompatibility(items)
-	require.Len(t, batches, 4)
-
-	// Priority order: Metrics(0) < Logs(1) < Discovery(2) < Backfill(3)
-	assert.Equal(t, collector.TaskTypeMetrics, batches[0].TaskType)
-	assert.Equal(t, collector.TaskTypeLogs, batches[1].TaskType)
-	assert.Equal(t, collector.TaskTypeDiscovery, batches[2].TaskType)
-	assert.Equal(t, collector.TaskTypeBackfill, batches[3].TaskType)
-}
-
-func TestGroupByCompatibility_Empty(t *testing.T) {
-	batches := collector.GroupByCompatibility(nil)
-	assert.Empty(t, batches)
-}
-
-func TestBuildQueryFromBatch_Metrics(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics,
-		Items: []collector.WorkItem{
-			{
-				AliasKey: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-				Params: map[string]any{
-					"startDate":              "2025-01-01T00:00:00Z",
-					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds":      30,
-					"averagingWindowSeconds": 60,
-				},
-			},
-			{
-				AliasKey: "11111111-2222-3333-4444-555555555555",
-				Params: map[string]any{
-					"startDate":              "2025-01-02T00:00:00Z",
-					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds":      30,
-					"averagingWindowSeconds": 60,
-				},
-			},
+func TestFragmentFromWorkItem_Metrics(t *testing.T) {
+	item := collector.WorkItem{
+		ID: "metrics:proj-a", Kind: collector.QueryMetrics,
+		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+		Params: map[string]any{
+			"startDate":              "2025-01-01T00:00:00Z",
+			"endDate":                "2025-01-01T06:00:00Z",
+			"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+			"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
+			"sampleRateSeconds":      30,
+			"averagingWindowSeconds": 60,
 		},
 	}
 
-	opName, query, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	f := collector.FragmentFromWorkItem(item)
+	alias := railway.SanitizeAlias("proj-a")
 
-	assert.Equal(t, "BatchMetrics", opName)
-	assert.Contains(t, query, "query BatchMetrics(")
-	assert.Contains(t, query, "p_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee: metrics(")
-	assert.Contains(t, query, "p_11111111_2222_3333_4444_555555555555: metrics(")
-
-	// Each project should have its own startDate variable
-	alias1 := railway.SanitizeAlias("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-	alias2 := railway.SanitizeAlias("11111111-2222-3333-4444-555555555555")
-	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate_"+alias1])
-	assert.Equal(t, "2025-01-02T00:00:00Z", vars["startDate_"+alias2])
+	assert.Equal(t, alias, f.Alias)
+	assert.Equal(t, "metrics", f.Field)
+	assert.Equal(t, collector.BreadthMetrics, f.Breadth)
+	assert.Contains(t, f.Args, `projectId: "proj-a"`)
+	assert.Contains(t, f.Args, "startDate: $startDate_"+alias)
+	assert.Contains(t, f.Args, "endDate: $endDate_"+alias)
+	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["startDate_"+alias])
+	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["endDate_"+alias])
 }
 
-func TestBuildQueryFromBatch_MetricsWithEndDate(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryMetrics,
-		TaskType: collector.TaskTypeBackfill,
-		Items: []collector.WorkItem{
-			{
-				AliasKey: "proj-a",
-				Params: map[string]any{
-					"startDate":              "2025-01-01T00:00:00Z",
-					"endDate":                "2025-01-01T06:00:00Z",
-					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds":      30,
-					"averagingWindowSeconds": 60,
-				},
-			},
-			{
-				AliasKey: "proj-b",
-				Params: map[string]any{
-					"startDate":              "2025-01-01T00:00:00Z",
-					"endDate":                "2025-01-01T06:00:00Z",
-					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds":      30,
-					"averagingWindowSeconds": 60,
-				},
-			},
+func TestFragmentFromWorkItem_MetricsNoEndDate(t *testing.T) {
+	item := collector.WorkItem{
+		ID: "metrics:proj-a", Kind: collector.QueryMetrics,
+		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+		Params: map[string]any{
+			"startDate":    "2025-01-01T00:00:00Z",
+			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 		},
 	}
 
-	_, _, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	f := collector.FragmentFromWorkItem(item)
+	alias := railway.SanitizeAlias("proj-a")
 
-	// Each project should have its own endDate variable
-	assert.Equal(t, "2025-01-01T06:00:00Z", vars["endDate_"+railway.SanitizeAlias("proj-a")])
-	assert.Equal(t, "2025-01-01T06:00:00Z", vars["endDate_"+railway.SanitizeAlias("proj-b")])
+	_, hasEndDate := f.VarValues["endDate_"+alias]
+	assert.False(t, hasEndDate, "realtime items should not have endDate")
 }
 
-func TestBuildQueryFromBatch_MetricsWithoutEndDate(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryMetrics,
-		TaskType: collector.TaskTypeMetrics,
-		Items: []collector.WorkItem{
-			{
-				AliasKey: "proj-a",
-				Params: map[string]any{
-					"startDate":              "2025-01-01T00:00:00Z",
-					"measurements":           []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-					"groupBy":                []railway.MetricTag{railway.MetricTagServiceId},
-					"sampleRateSeconds":      30,
-					"averagingWindowSeconds": 60,
-				},
-			},
+func TestFragmentFromWorkItem_EnvironmentLogs(t *testing.T) {
+	item := collector.WorkItem{
+		ID: "envlogs:env-a", Kind: collector.QueryEnvironmentLogs,
+		TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+		Params: map[string]any{
+			"afterDate":  "2025-01-01T00:00:00Z",
+			"beforeDate": "2025-01-01T06:00:00Z",
+			"afterLimit": 500,
 		},
 	}
 
-	_, _, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	f := collector.FragmentFromWorkItem(item)
+	alias := railway.SanitizeAlias("env-a")
 
-	// Realtime items don't set endDate -- per-alias endDate vars should not exist
-	_, hasEndDate := vars["endDate_"+railway.SanitizeAlias("proj-a")]
-	assert.False(t, hasEndDate, "realtime items should not have endDate in vars")
+	assert.Equal(t, alias, f.Alias)
+	assert.Equal(t, "environmentLogs", f.Field)
+	assert.Equal(t, collector.BreadthEnvironmentLogs, f.Breadth)
+	assert.Equal(t, "2025-01-01T00:00:00Z", f.VarValues["afterDate_"+alias])
+	assert.Equal(t, "2025-01-01T06:00:00Z", f.VarValues["beforeDate_"+alias])
+	assert.Equal(t, 500, f.VarValues["afterLimit_"+alias])
 }
 
-func TestBuildQueryFromBatch_EnvironmentLogsWithBeforeDate(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryEnvironmentLogs,
-		TaskType: collector.TaskTypeBackfill,
-		Items: []collector.WorkItem{
-			{
-				AliasKey: "env-a",
-				Params:   map[string]any{"afterDate": "2025-01-01T00:00:00Z", "beforeDate": "2025-01-01T06:00:00Z", "afterLimit": 5000},
-			},
+func TestFragmentFromWorkItem_BuildLogs(t *testing.T) {
+	item := collector.WorkItem{
+		ID: "buildlogs:dep-a", Kind: collector.QueryBuildLogs,
+		TaskType: collector.TaskTypeLogs, AliasKey: "dep-a",
+		Params: map[string]any{
+			"limit":     500,
+			"startDate": "2025-01-01T00:00:00Z",
 		},
 	}
 
-	_, _, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	f := collector.FragmentFromWorkItem(item)
+	depAlias := railway.SanitizeAlias("dep-a") + "_build"
 
-	assert.Equal(t, "2025-01-01T06:00:00Z", vars["beforeDate"])
+	assert.Equal(t, depAlias, f.Alias)
+	assert.Equal(t, "buildLogs", f.Field)
+	assert.Equal(t, collector.BreadthBuildLogs, f.Breadth)
 }
 
-func TestBuildQueryFromBatch_EnvironmentLogs(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryEnvironmentLogs,
-		TaskType: collector.TaskTypeLogs,
-		Items: []collector.WorkItem{
-			{
-				AliasKey: "env-aaa",
-				Params:   map[string]any{"afterDate": "2025-01-02T00:00:00Z", "afterLimit": 500},
-			},
-			{
-				AliasKey: "env-bbb",
-				Params:   map[string]any{"afterDate": "2025-01-01T00:00:00Z", "afterLimit": 500},
-			},
+func TestFragmentFromWorkItem_HttpLogs(t *testing.T) {
+	item := collector.WorkItem{
+		ID: "httplogs:dep-a", Kind: collector.QueryHttpLogs,
+		TaskType: collector.TaskTypeLogs, AliasKey: "dep-a",
+		Params: map[string]any{
+			"limit":     500,
+			"startDate": "2025-01-01T00:00:00Z",
 		},
 	}
 
-	opName, query, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	f := collector.FragmentFromWorkItem(item)
+	depAlias := railway.SanitizeAlias("dep-a") + "_http"
 
-	assert.Equal(t, "BatchEnvironmentLogs", opName)
-	assert.Contains(t, query, "query BatchEnvironmentLogs(")
-	assert.Contains(t, query, "p_env_aaa: environmentLogs(")
-	assert.Contains(t, query, "p_env_bbb: environmentLogs(")
-	assert.Equal(t, "2025-01-01T00:00:00Z", vars["afterDate"])
+	assert.Equal(t, depAlias, f.Alias)
+	assert.Equal(t, "httpLogs", f.Field)
+	assert.Equal(t, collector.BreadthHttpLogs, f.Breadth)
 }
 
-func TestBuildQueryFromBatch_Discovery(t *testing.T) {
-	batch := collector.Batch{
-		Kind:     collector.QueryDiscovery,
-		TaskType: collector.TaskTypeDiscovery,
-		Items:    []collector.WorkItem{{ID: "discovery"}},
+func TestPack_FitsWithinBreadthBudget(t *testing.T) {
+	// 15 metrics fragments × 12 breadth = 180, fits in one request (under 20 alias cap)
+	var fragments []collector.AliasFragment
+	for i := 0; i < 15; i++ {
+		fragments = append(fragments, collector.AliasFragment{
+			Alias:   fmt.Sprintf("alias_%d", i),
+			Breadth: collector.BreadthMetrics, // 12
+		})
 	}
 
-	opName, query, vars, err := collector.BuildQueryFromBatch(batch)
-	require.NoError(t, err)
+	requests := collector.Pack(fragments)
+	require.Len(t, requests, 1)
+	assert.Equal(t, 180, requests[0].Breadth)
+	assert.Len(t, requests[0].Fragments, 15)
+}
 
-	assert.Equal(t, "Discovery", opName)
-	assert.Empty(t, query)
-	assert.Nil(t, vars)
+func TestPack_SplitsAtAliasLimit(t *testing.T) {
+	// 25 metrics fragments: first 20 in request 1, remaining 5 in request 2
+	var fragments []collector.AliasFragment
+	for i := 0; i < 25; i++ {
+		fragments = append(fragments, collector.AliasFragment{
+			Alias:   fmt.Sprintf("alias_%d", i),
+			Breadth: collector.BreadthMetrics,
+		})
+	}
+
+	requests := collector.Pack(fragments)
+	require.Len(t, requests, 2)
+	assert.Len(t, requests[0].Fragments, collector.MaxAliasesPerRequest)
+	assert.Len(t, requests[1].Fragments, 5)
+}
+
+func TestPack_SplitsAtBreadthLimit(t *testing.T) {
+	// 5 fragments with breadth 120 each = 600 > 500, splits at 4 (480)
+	var fragments []collector.AliasFragment
+	for i := 0; i < 5; i++ {
+		fragments = append(fragments, collector.AliasFragment{
+			Alias:   fmt.Sprintf("alias_%d", i),
+			Breadth: 120,
+		})
+	}
+
+	requests := collector.Pack(fragments)
+	require.Len(t, requests, 2)
+	assert.Equal(t, 480, requests[0].Breadth)
+	assert.Equal(t, 120, requests[1].Breadth)
+}
+
+func TestPack_MixedTypes(t *testing.T) {
+	// Mix metrics (12) and env logs (13): both fit in one request
+	fragments := []collector.AliasFragment{
+		{Alias: "m1", Breadth: collector.BreadthMetrics},
+		{Alias: "l1", Breadth: collector.BreadthEnvironmentLogs},
+	}
+
+	requests := collector.Pack(fragments)
+	require.Len(t, requests, 1)
+	assert.Equal(t, 25, requests[0].Breadth)
+}
+
+func TestPack_Empty(t *testing.T) {
+	requests := collector.Pack(nil)
+	assert.Empty(t, requests)
+}
+
+func TestAssembleQuery_ProducesValidGraphQL(t *testing.T) {
+	item1 := collector.WorkItem{
+		ID: "m1", Kind: collector.QueryMetrics,
+		TaskType: collector.TaskTypeMetrics, AliasKey: "proj-a",
+		Params: map[string]any{
+			"startDate":    "2025-01-01T00:00:00Z",
+			"measurements": []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		},
+	}
+	item2 := collector.WorkItem{
+		ID: "l1", Kind: collector.QueryEnvironmentLogs,
+		TaskType: collector.TaskTypeLogs, AliasKey: "env-a",
+		Params: map[string]any{
+			"afterDate":  "2025-01-01T00:00:00Z",
+			"afterLimit": 500,
+		},
+	}
+
+	f1 := collector.FragmentFromWorkItem(item1)
+	f2 := collector.FragmentFromWorkItem(item2)
+	req := collector.Request{Fragments: []collector.AliasFragment{f1, f2}, Breadth: f1.Breadth + f2.Breadth}
+
+	query, vars := req.AssembleQuery()
+
+	assert.Contains(t, query, "query Batch(")
+	assert.Contains(t, query, "p_proj_a: metrics(")
+	assert.Contains(t, query, "p_env_a: environmentLogs(")
+
+	// Variables are fully namespaced per alias
+	assert.Equal(t, "2025-01-01T00:00:00Z", vars["startDate_p_proj_a"])
+	assert.Equal(t, "2025-01-01T00:00:00Z", vars["afterDate_p_env_a"])
+	assert.Equal(t, 500, vars["afterLimit_p_env_a"])
+}
+
+func TestSortByPriority(t *testing.T) {
+	fragments := []collector.AliasFragment{
+		{Alias: "l1", Item: collector.WorkItem{TaskType: collector.TaskTypeLogs}},
+		{Alias: "m1", Item: collector.WorkItem{TaskType: collector.TaskTypeMetrics}},
+		{Alias: "d1", Item: collector.WorkItem{TaskType: collector.TaskTypeDiscovery}},
+	}
+
+	collector.SortByPriority(fragments)
+
+	assert.Equal(t, collector.TaskTypeMetrics, fragments[0].Item.TaskType)
+	assert.Equal(t, collector.TaskTypeLogs, fragments[1].Item.TaskType)
+	assert.Equal(t, collector.TaskTypeDiscovery, fragments[2].Item.TaskType)
 }
 
 // fakeGenerator implements TaskGenerator for testing result dispatch.
@@ -244,14 +248,17 @@ func (g *fakeGenerator) Deliver(_ context.Context, item collector.WorkItem, data
 	g.deliveries = append(g.deliveries, fakeDelivery{item: item, data: data, err: err})
 }
 
-func TestDispatchResults_Success(t *testing.T) {
+func TestDispatchRequestResults_Success(t *testing.T) {
 	gen := &fakeGenerator{taskType: collector.TaskTypeMetrics}
-	items := []collector.WorkItem{
-		{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
-	}
-	batch := collector.Batch{Kind: collector.QueryMetrics, Items: items}
+	alias := railway.SanitizeAlias("proj-a")
 
-	alias := railway.SanitizeAlias("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	item := collector.WorkItem{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"}
+	req := collector.Request{
+		Fragments: []collector.AliasFragment{
+			{Alias: alias, Item: item},
+		},
+	}
+
 	resp := &railway.RawQueryResponse{
 		Data: map[string]json.RawMessage{
 			alias: json.RawMessage(`[{"measurement":"CPU_USAGE"}]`),
@@ -259,100 +266,53 @@ func TestDispatchResults_Success(t *testing.T) {
 	}
 
 	generatorMap := map[string]collector.TaskGenerator{"m1": gen}
-	collector.DispatchResults(context.Background(), batch, resp, nil, generatorMap)
+	collector.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
 	require.Len(t, gen.deliveries, 1)
 	assert.Nil(t, gen.deliveries[0].err)
 	assert.Contains(t, string(gen.deliveries[0].data), "CPU_USAGE")
 }
 
-func TestDispatchResults_QueryError(t *testing.T) {
+func TestDispatchRequestResults_QueryError(t *testing.T) {
 	gen := &fakeGenerator{taskType: collector.TaskTypeMetrics}
-	items := []collector.WorkItem{
-		{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"},
-		{ID: "m2", Kind: collector.QueryMetrics, AliasKey: "proj-b"},
+	item1 := collector.WorkItem{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"}
+	item2 := collector.WorkItem{ID: "m2", Kind: collector.QueryMetrics, AliasKey: "proj-b"}
+
+	req := collector.Request{
+		Fragments: []collector.AliasFragment{
+			{Alias: "p_proj_a", Item: item1},
+			{Alias: "p_proj_b", Item: item2},
+		},
 	}
-	batch := collector.Batch{Kind: collector.QueryMetrics, Items: items}
 
 	generatorMap := map[string]collector.TaskGenerator{"m1": gen, "m2": gen}
-	collector.DispatchResults(context.Background(), batch, nil, assert.AnError, generatorMap)
+	collector.DispatchRequestResults(context.Background(), req, nil, assert.AnError, generatorMap)
 
-	// Both items should get the error
 	require.Len(t, gen.deliveries, 2)
 	assert.ErrorIs(t, gen.deliveries[0].err, assert.AnError)
 	assert.ErrorIs(t, gen.deliveries[1].err, assert.AnError)
 }
 
-func TestDispatchResults_PartialGraphQLError(t *testing.T) {
-	gen := &fakeGenerator{taskType: collector.TaskTypeMetrics}
-	alias1 := railway.SanitizeAlias("proj-a")
-	alias2 := railway.SanitizeAlias("proj-b")
-
-	items := []collector.WorkItem{
-		{ID: "m1", Kind: collector.QueryMetrics, AliasKey: "proj-a"},
-		{ID: "m2", Kind: collector.QueryMetrics, AliasKey: "proj-b"},
-	}
-	batch := collector.Batch{Kind: collector.QueryMetrics, Items: items}
-
-	resp := &railway.RawQueryResponse{
-		Data: map[string]json.RawMessage{
-			alias1: json.RawMessage(`[{"measurement":"CPU_USAGE"}]`),
-			alias2: json.RawMessage(`null`),
-		},
-		Errors: []railway.GraphQLError{
-			{Message: "project not found", Path: []string{alias2}},
-		},
-	}
-
-	generatorMap := map[string]collector.TaskGenerator{"m1": gen, "m2": gen}
-	collector.DispatchResults(context.Background(), batch, resp, nil, generatorMap)
-
-	require.Len(t, gen.deliveries, 2)
-	// First alias succeeded
-	assert.Nil(t, gen.deliveries[0].err)
-	assert.Contains(t, string(gen.deliveries[0].data), "CPU_USAGE")
-	// Second alias got the GraphQL error
-	assert.Error(t, gen.deliveries[1].err)
-	assert.Contains(t, gen.deliveries[1].err.Error(), "project not found")
-}
-
-func TestDispatchResults_BuildLogsSuffix(t *testing.T) {
+func TestDispatchRequestResults_BuildLogsSuffix(t *testing.T) {
 	gen := &fakeGenerator{taskType: collector.TaskTypeLogs}
-	depAlias := railway.SanitizeAlias("dep-123")
+	depAlias := railway.SanitizeAlias("dep-123") + "_build"
 
-	items := []collector.WorkItem{
-		{ID: "b1", Kind: collector.QueryBuildLogs, AliasKey: "dep-123"},
+	item := collector.WorkItem{ID: "b1", Kind: collector.QueryBuildLogs, AliasKey: "dep-123"}
+	req := collector.Request{
+		Fragments: []collector.AliasFragment{
+			{Alias: depAlias, Item: item},
+		},
 	}
-	batch := collector.Batch{Kind: collector.QueryBuildLogs, Items: items}
 
 	resp := &railway.RawQueryResponse{
 		Data: map[string]json.RawMessage{
-			depAlias + "_build": json.RawMessage(`[{"timestamp":"2025-01-01T00:00:00Z"}]`),
+			depAlias: json.RawMessage(`[{"timestamp":"2025-01-01T00:00:00Z"}]`),
 		},
 	}
 
 	generatorMap := map[string]collector.TaskGenerator{"b1": gen}
-	collector.DispatchResults(context.Background(), batch, resp, nil, generatorMap)
+	collector.DispatchRequestResults(context.Background(), req, resp, nil, generatorMap)
 
 	require.Len(t, gen.deliveries, 1)
 	assert.Nil(t, gen.deliveries[0].err)
-}
-
-func TestOperationNameForBatch(t *testing.T) {
-	tests := []struct {
-		kind     collector.QueryKind
-		expected string
-	}{
-		{collector.QueryMetrics, "BatchMetrics"},
-		{collector.QueryEnvironmentLogs, "BatchEnvironmentLogs"},
-		{collector.QueryBuildLogs, "BatchDeploymentLogs"},
-		{collector.QueryHttpLogs, "BatchDeploymentLogs"},
-		{collector.QueryDiscovery, "Discovery"},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.kind), func(t *testing.T) {
-			assert.Equal(t, tt.expected, collector.OperationNameForBatch(tt.kind))
-		})
-	}
 }

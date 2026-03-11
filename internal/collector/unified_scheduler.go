@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,93 +127,173 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 		return
 	}
 
-	// 2. Group into mergeable batches (sorted by priority).
-	batches := GroupByCompatibility(allItems)
-	if len(batches) == 0 {
+	// 2. Handle discovery items separately (they use genqlient, not raw queries).
+	var queryItems []WorkItem
+	var discoveryItems []WorkItem
+	for _, item := range allItems {
+		if item.Kind == QueryDiscovery {
+			discoveryItems = append(discoveryItems, item)
+		} else {
+			queryItems = append(queryItems, item)
+		}
+	}
+
+	// If we only have discovery items, handle them directly.
+	if len(queryItems) == 0 && len(discoveryItems) > 0 {
+		if !s.cfg.Credits.TryDeduct(TaskTypeDiscovery, now) {
+			s.logIdleStatus(now)
+			return
+		}
+		if err := s.limiter.Wait(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.cfg.Logger.Warn("rate limiter wait failed", "error", err)
+			return
+		}
+		s.handleDiscoveryItems(ctx, discoveryItems, generatorMap)
 		return
 	}
 
-	// 3. Select highest-priority batch with available credits.
-	var selected *Batch
-	var skippedTypes []string
-	for i := range batches {
-		if s.cfg.Credits.TryDeduct(batches[i].TaskType, now) {
-			selected = &batches[i]
-			break
-		}
-		skippedTypes = append(skippedTypes, batches[i].TaskType.String())
+	// 3. Convert work items to self-contained alias fragments.
+	var fragments []AliasFragment
+	for _, item := range queryItems {
+		fragments = append(fragments, FragmentFromWorkItem(item))
 	}
-	if selected == nil {
+	SortByPriority(fragments)
+
+	// 4. Try credit deduction. Walk fragments by priority, deduct credits for
+	//    each task type encountered, and collect credited fragments.
+	var credited []AliasFragment
+	deducted := make(map[TaskType]bool)
+	var skippedTypes []string
+	for _, f := range fragments {
+		tt := f.Item.TaskType
+		if !deducted[tt] {
+			if !s.cfg.Credits.TryDeduct(tt, now) {
+				skippedTypes = append(skippedTypes, tt.String())
+				continue
+			}
+			deducted[tt] = true
+		}
+		credited = append(credited, f)
+	}
+
+	if len(skippedTypes) > 0 {
+		s.cfg.Logger.Debug("task types skipped (insufficient credits)", "types", skippedTypes)
+	}
+
+	// Also try discovery if we have discovery items queued.
+	if len(discoveryItems) > 0 && s.cfg.Credits.TryDeduct(TaskTypeDiscovery, now) {
+		deducted[TaskTypeDiscovery] = true
+	}
+
+	if len(credited) == 0 && !deducted[TaskTypeDiscovery] {
 		s.logIdleStatus(now)
 		return
 	}
 
-	s.cfg.Logger.Debug("scheduler tick: batch selected",
-		"kind", selected.Kind,
-		"task_type", selected.TaskType.String(),
-		"aliases", len(selected.Items),
-		"candidates", len(batches),
-		"skipped_no_credits", skippedTypes,
-	)
+	// 5. Pack credited fragments into requests (breadth budget).
+	requests := Pack(credited)
 
-	// 4. Wait for rate limiter.
-	if err := s.limiter.Wait(ctx); err != nil {
-		if ctx.Err() != nil {
+	if len(requests) == 0 && !deducted[TaskTypeDiscovery] {
+		s.logIdleStatus(now)
+		return
+	}
+
+	// 6. Execute all packed requests, rate-limited.
+	for i, req := range requests {
+		if err := s.limiter.Wait(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.cfg.Logger.Warn("rate limiter wait failed", "error", err)
 			return
 		}
-		s.cfg.Logger.Warn("rate limiter wait failed", "error", err)
-		return
+
+		s.cfg.Logger.Debug("scheduler tick: executing request",
+			"request", i+1,
+			"total_requests", len(requests),
+			"aliases", len(req.Fragments),
+			"breadth", req.Breadth,
+		)
+
+		query, vars := req.AssembleQuery()
+		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
+		s.updateRateState()
+
+		// On computation limit errors with multi-alias requests, retry individually
+		if queryErr != nil && len(req.Fragments) > 1 && strings.Contains(queryErr.Error(), "Problem processing request") {
+			s.cfg.Logger.Warn("batch request hit computation limit, retrying aliases individually",
+				"aliases", len(req.Fragments),
+				"error", queryErr,
+			)
+			s.retryFragmentsIndividually(ctx, req.Fragments, generatorMap)
+			continue
+		}
+
+		DispatchRequestResults(ctx, req, resp, queryErr, generatorMap)
 	}
 
-	// 5. Handle discovery specially (cascading genqlient calls, not raw query).
-	if selected.Kind == QueryDiscovery {
-		s.handleDiscovery(ctx, *selected, generatorMap)
-		return
+	// 7. Handle discovery if credited (piggyback on same tick after the queries).
+	if deducted[TaskTypeDiscovery] && len(discoveryItems) > 0 {
+		s.handleDiscoveryItems(ctx, discoveryItems, generatorMap)
 	}
-
-	// 6. Build and execute the batched query.
-	opName, query, vars, buildErr := BuildQueryFromBatch(*selected)
-	if buildErr != nil {
-		s.cfg.Logger.Error("failed to build batch query",
-			"kind", selected.Kind, "error", buildErr)
-		return
-	}
-
-	s.cfg.Logger.Debug("executing batch query",
-		"operation", opName,
-		"kind", selected.Kind,
-		"aliases", len(selected.Items),
-	)
-
-	resp, queryErr := s.cfg.API.RawQuery(ctx, opName, query, vars)
-
-	// 7. Update rate limit state from headers.
-	s.updateRateState()
-
-	// 8. Dispatch results back to generators.
-	DispatchResults(ctx, *selected, resp, queryErr, generatorMap)
 }
 
-// handleDiscovery executes discovery refresh via the TargetProvider's Refresh
-// method rather than building a raw query.
-func (s *UnifiedScheduler) handleDiscovery(ctx context.Context, batch Batch, generatorMap map[string]TaskGenerator) {
-	// Find the DiscoveryGenerator (it has a Refresh method).
+// handleDiscoveryItems executes discovery refresh via the TargetProvider's
+// Refresh method rather than building a raw query.
+func (s *UnifiedScheduler) handleDiscoveryItems(ctx context.Context, items []WorkItem, generatorMap map[string]TaskGenerator) {
 	gen, ok := s.generatorsByType[TaskTypeDiscovery]
 	if !ok {
 		s.cfg.Logger.Error("discovery generator not found")
 		return
 	}
 
-	// DiscoveryGenerator has a Refresh convenience method.
 	if dg, ok := gen.(*DiscoveryGenerator); ok {
 		err := dg.Refresh(ctx)
-		for _, item := range batch.Items {
+		for _, item := range items {
 			if g, exists := generatorMap[item.ID]; exists {
 				g.Deliver(ctx, item, nil, err)
 			}
 		}
 	} else {
 		s.cfg.Logger.Error("discovery generator does not support Refresh")
+	}
+}
+
+// retryFragmentsIndividually retries each fragment as a solo request after a batch
+// computation limit error. This isolates which alias caused the failure.
+func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragments []AliasFragment, generatorMap map[string]TaskGenerator) {
+	for _, frag := range fragments {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := s.limiter.Wait(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.cfg.Logger.Warn("rate limiter wait failed during retry", "error", err)
+			return
+		}
+
+		soloReq := Request{
+			Fragments: []AliasFragment{frag},
+			Breadth:   frag.Breadth,
+		}
+		query, vars := soloReq.AssembleQuery()
+		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
+		s.updateRateState()
+
+		if queryErr != nil {
+			s.cfg.Logger.Warn("individual alias retry failed",
+				"alias", frag.Alias,
+				"kind", frag.Item.Kind,
+				"error", queryErr,
+			)
+		}
+
+		DispatchRequestResults(ctx, soloReq, resp, queryErr, generatorMap)
 	}
 }
 

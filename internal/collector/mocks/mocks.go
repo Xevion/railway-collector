@@ -231,34 +231,6 @@ func (mr *MockStateStoreMockRecorder) GetDiscoveryCache(projectID any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).GetDiscoveryCache), projectID)
 }
 
-// GetLogCursor mocks base method.
-func (m *MockStateStore) GetLogCursor(deploymentID, logType string) time.Time {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLogCursor", deploymentID, logType)
-	ret0, _ := ret[0].(time.Time)
-	return ret0
-}
-
-// GetLogCursor indicates an expected call of GetLogCursor.
-func (mr *MockStateStoreMockRecorder) GetLogCursor(deploymentID, logType any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogCursor", reflect.TypeOf((*MockStateStore)(nil).GetLogCursor), deploymentID, logType)
-}
-
-// GetMetricCursor mocks base method.
-func (m *MockStateStore) GetMetricCursor(projectID string) time.Time {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMetricCursor", projectID)
-	ret0, _ := ret[0].(time.Time)
-	return ret0
-}
-
-// GetMetricCursor indicates an expected call of GetMetricCursor.
-func (mr *MockStateStoreMockRecorder) GetMetricCursor(projectID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetricCursor", reflect.TypeOf((*MockStateStore)(nil).GetMetricCursor), projectID)
-}
-
 // GetProjectListCache mocks base method.
 func (m *MockStateStore) GetProjectListCache(workspaceID string) ([]byte, error) {
 	m.ctrl.T.Helper()
@@ -330,34 +302,6 @@ func (m *MockStateStore) SetDiscoveryCache(projectID string, data []byte) error 
 func (mr *MockStateStoreMockRecorder) SetDiscoveryCache(projectID, data any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDiscoveryCache", reflect.TypeOf((*MockStateStore)(nil).SetDiscoveryCache), projectID, data)
-}
-
-// SetLogCursor mocks base method.
-func (m *MockStateStore) SetLogCursor(deploymentID, logType string, ts time.Time) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetLogCursor", deploymentID, logType, ts)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetLogCursor indicates an expected call of SetLogCursor.
-func (mr *MockStateStoreMockRecorder) SetLogCursor(deploymentID, logType, ts any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLogCursor", reflect.TypeOf((*MockStateStore)(nil).SetLogCursor), deploymentID, logType, ts)
-}
-
-// SetMetricCursor mocks base method.
-func (m *MockStateStore) SetMetricCursor(projectID string, ts time.Time) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetMetricCursor", projectID, ts)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetMetricCursor indicates an expected call of SetMetricCursor.
-func (mr *MockStateStoreMockRecorder) SetMetricCursor(projectID, ts any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMetricCursor", reflect.TypeOf((*MockStateStore)(nil).SetMetricCursor), projectID, ts)
 }
 
 // SetProjectListCache mocks base method.

@@ -101,12 +101,10 @@ func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []
 	return gaps
 }
 
-// PrioritizeGaps sorts gaps by urgency: older gaps (closer to retention expiry) first,
-// with ties broken by gap size (larger first).
+// PrioritizeGaps sorts gaps by recency: the most recent gap (live edge) always
+// wins, older gaps score lower. Score = 1.0 / max(gap_age_seconds, 1) where
+// gap_age is now minus the gap's end time.
 func PrioritizeGaps(gaps []TimeRange, now time.Time) []TimeRange {
-	const retentionDays = 90
-	retentionWindow := time.Duration(retentionDays) * 24 * time.Hour
-
 	type scored struct {
 		gap   TimeRange
 		score float64
@@ -114,14 +112,11 @@ func PrioritizeGaps(gaps []TimeRange, now time.Time) []TimeRange {
 
 	scoredGaps := make([]scored, len(gaps))
 	for i, g := range gaps {
-		age := now.Sub(g.End)
-		retentionLeft := retentionWindow - age
-		if retentionLeft <= 0 {
-			retentionLeft = time.Minute // already expired, max urgency
+		ageSecs := now.Sub(g.End).Seconds()
+		if ageSecs < 1 {
+			ageSecs = 1
 		}
-		urgency := 1.0 / retentionLeft.Hours()
-		size := g.Duration().Hours()
-		scoredGaps[i] = scored{gap: g, score: urgency * size}
+		scoredGaps[i] = scored{gap: g, score: 1.0 / ageSecs}
 	}
 
 	sort.Slice(scoredGaps, func(i, j int) bool {

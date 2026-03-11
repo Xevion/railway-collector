@@ -43,8 +43,7 @@ func (cmd *StatsCmd) Run(c *CLI) error {
 		return fmt.Errorf("reading bucket stats: %w", err)
 	}
 
-	// Get cursor age ranges for metric and log buckets
-	metricCursors, _ := reader.MetricCursors()
+	// Get cursor age ranges for log buckets
 	logCursors, _ := reader.LogCursors()
 
 	now := time.Now()
@@ -61,16 +60,11 @@ func (cmd *StatsCmd) Run(c *CLI) error {
 		return
 	}
 
-	metricTimes := make([]struct{ ts time.Time }, len(metricCursors))
-	for i, c := range metricCursors {
-		metricTimes[i].ts = c.Timestamp
-	}
 	logTimes := make([]struct{ ts time.Time }, len(logCursors))
 	for i, c := range logCursors {
 		logTimes[i].ts = c.Timestamp
 	}
 
-	metricOldest, metricNewest := cursorRange(metricTimes)
 	logOldest, logNewest := cursorRange(logTimes)
 
 	if c.JSON {
@@ -78,9 +72,6 @@ func (cmd *StatsCmd) Run(c *CLI) error {
 		for _, bs := range bucketStats {
 			bj := bucketJSON{Name: bs.Name, Count: bs.Count}
 			switch bs.Name {
-			case "metric_cursors":
-				bj.Oldest = metricOldest
-				bj.Newest = metricNewest
 			case "log_cursors":
 				bj.Oldest = logOldest
 				bj.Newest = logNewest
@@ -101,8 +92,6 @@ func (cmd *StatsCmd) Run(c *CLI) error {
 	for _, bs := range bucketStats {
 		oldest, newest := "", ""
 		switch bs.Name {
-		case "metric_cursors":
-			oldest, newest = metricOldest, metricNewest
 		case "log_cursors":
 			oldest, newest = logOldest, logNewest
 		}

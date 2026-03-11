@@ -20,10 +20,10 @@ func TestCreditPool_DripRate(t *testing.T) {
 	// Initially has 1.0 credit (startup)
 	assert.InDelta(t, 1.0, ca.Available(collector.TaskTypeMetrics, now), 0.01)
 
-	// After 30 seconds, metrics (2/min rate) should have accumulated ~1.0 more
-	later := now.Add(30 * time.Second)
+	// After 5 seconds, metrics (8/min = 0.133/s) should have accumulated ~0.67 more
+	later := now.Add(5 * time.Second)
 	avail := ca.Available(collector.TaskTypeMetrics, later)
-	assert.InDelta(t, 2.0, avail, 0.1) // 1.0 initial + 1.0 from 30s at 2/min
+	assert.InDelta(t, 1.67, avail, 0.1) // 1.0 initial + 0.67 from 5s at 8/min
 }
 
 func TestCreditPool_MaxCap(t *testing.T) {
@@ -31,9 +31,9 @@ func TestCreditPool_MaxCap(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
-	// After 10 minutes, backfill at 11/min should be capped at MaxCredits (4.0)
+	// After 10 minutes, metrics at 8/min should be capped at MaxCredits (4.0)
 	later := now.Add(10 * time.Minute)
-	avail := ca.Available(collector.TaskTypeBackfill, later)
+	avail := ca.Available(collector.TaskTypeMetrics, later)
 	assert.InDelta(t, cfg.MaxCredits, avail, 0.01)
 }
 
@@ -47,8 +47,8 @@ func TestCreditAllocator_TryDeduct(t *testing.T) {
 	// Should not have another yet
 	assert.False(t, ca.TryDeduct(collector.TaskTypeMetrics, now))
 
-	// Wait 30 seconds (1 credit at 2/min)
-	later := now.Add(30 * time.Second)
+	// Wait 8 seconds (just over 1 credit at 8/min = 0.133/s)
+	later := now.Add(8 * time.Second)
 	assert.True(t, ca.TryDeduct(collector.TaskTypeMetrics, later))
 }
 
@@ -76,21 +76,21 @@ func TestCreditAllocator_RegimeTransitions(t *testing.T) {
 	assert.Equal(t, collector.RegimeAbundant, ca.Regime())
 }
 
-func TestCreditAllocator_ScarceDisablesBackfill(t *testing.T) {
+func TestCreditAllocator_ScarceReducesDiscovery(t *testing.T) {
 	cfg := collector.DefaultCreditConfig()
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	ca := collector.NewCreditAllocator(cfg, now, discardLogger)
 
-	// Use initial backfill credit
-	ca.TryDeduct(collector.TaskTypeBackfill, now)
+	// Use initial discovery credit
+	ca.TryDeduct(collector.TaskTypeDiscovery, now)
 
 	// Switch to scarce
 	ca.UpdateRegime(50, 1000, 3600)
 
-	// Wait -- backfill should not accumulate credits
+	// Wait -- discovery should not accumulate credits (rate set to 0 in scarce)
 	later := now.Add(5 * time.Minute)
-	assert.InDelta(t, 0.0, ca.Available(collector.TaskTypeBackfill, later), 0.01)
+	assert.InDelta(t, 0.0, ca.Available(collector.TaskTypeDiscovery, later), 0.01)
 
-	// Metrics should still accumulate
+	// Metrics should still accumulate (at reduced rate)
 	assert.True(t, ca.Available(collector.TaskTypeMetrics, later) >= 1.0)
 }

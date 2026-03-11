@@ -15,7 +15,6 @@ const (
 	TaskTypeMetrics TaskType = iota
 	TaskTypeLogs
 	TaskTypeDiscovery
-	TaskTypeBackfill
 )
 
 // String returns a human-readable name for the task type.
@@ -27,8 +26,6 @@ func (t TaskType) String() string {
 		return "logs"
 	case TaskTypeDiscovery:
 		return "discovery"
-	case TaskTypeBackfill:
-		return "backfill"
 	default:
 		return "unknown"
 	}
@@ -86,10 +83,6 @@ type RailwayAPI interface {
 
 // StateStore abstracts persistent cursor and cache storage for testing.
 type StateStore interface {
-	GetLogCursor(deploymentID, logType string) time.Time
-	SetLogCursor(deploymentID, logType string, ts time.Time) error
-	GetMetricCursor(projectID string) time.Time
-	SetMetricCursor(projectID string, ts time.Time) error
 	GetDiscoveryCache(projectID string) ([]byte, error)
 	SetDiscoveryCache(projectID string, data []byte) error
 	ListDiscoveryCache() (map[string][]byte, error)

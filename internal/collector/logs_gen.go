@@ -9,6 +9,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/xevion/railway-collector/internal/logging"
 	"github.com/xevion/railway-collector/internal/sink"
 )
 
@@ -54,27 +55,33 @@ type rawHttpLogEntry struct {
 
 // LogsGeneratorConfig configures a LogsGenerator.
 type LogsGeneratorConfig struct {
-	Discovery TargetProvider
-	Store     StateStore
-	Sinks     []sink.Sink
-	Clock     clockwork.Clock
-	Types     []string      // enabled log types: "deployment", "build", "http"
-	Limit     int           // max logs per request
-	Interval  time.Duration // minimum time between polls
-	Logger    *slog.Logger
+	Discovery       TargetProvider
+	Store           StateStore
+	Sinks           []sink.Sink
+	Clock           clockwork.Clock
+	Types           []string      // enabled log types: "deployment", "build", "http"
+	Limit           int           // max logs per request
+	Interval        time.Duration // minimum time between polls
+	LogRetention    time.Duration // how far back to scan for env log gaps (e.g. 5 days)
+	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
+	MaxItemsPerPoll int           // max work items to emit per poll
+	Logger          *slog.Logger
 }
 
 // LogsGenerator implements TaskGenerator for log collection.
-// It emits WorkItems for environment logs, build logs, and HTTP logs.
+// All log types (environment, build, HTTP) use coverage-driven gap filling.
 type LogsGenerator struct {
-	discovery TargetProvider
-	store     StateStore
-	sinks     []sink.Sink
-	clock     clockwork.Clock
-	types     map[string]bool
-	limit     int
-	interval  time.Duration
-	logger    *slog.Logger
+	discovery       TargetProvider
+	store           StateStore
+	sinks           []sink.Sink
+	clock           clockwork.Clock
+	types           map[string]bool
+	limit           int
+	interval        time.Duration
+	logRetention    time.Duration
+	chunkSize       time.Duration
+	maxItemsPerPoll int
+	logger          *slog.Logger
 
 	nextPoll time.Time
 }
@@ -85,16 +92,28 @@ func NewLogsGenerator(cfg LogsGeneratorConfig) *LogsGenerator {
 	for _, t := range cfg.Types {
 		typeSet[t] = true
 	}
+	if cfg.LogRetention == 0 {
+		cfg.LogRetention = 5 * 24 * time.Hour
+	}
+	if cfg.ChunkSize == 0 {
+		cfg.ChunkSize = 6 * time.Hour
+	}
+	if cfg.MaxItemsPerPoll == 0 {
+		cfg.MaxItemsPerPoll = 10
+	}
 
 	return &LogsGenerator{
-		discovery: cfg.Discovery,
-		store:     cfg.Store,
-		sinks:     cfg.Sinks,
-		clock:     cfg.Clock,
-		types:     typeSet,
-		limit:     cfg.Limit,
-		interval:  cfg.Interval,
-		logger:    cfg.Logger,
+		discovery:       cfg.Discovery,
+		store:           cfg.Store,
+		sinks:           cfg.Sinks,
+		clock:           cfg.Clock,
+		types:           typeSet,
+		limit:           cfg.Limit,
+		interval:        cfg.Interval,
+		logRetention:    cfg.LogRetention,
+		chunkSize:       cfg.ChunkSize,
+		maxItemsPerPoll: cfg.MaxItemsPerPoll,
+		logger:          cfg.Logger,
 	}
 }
 
@@ -107,8 +126,7 @@ func (g *LogsGenerator) Type() TaskType {
 func (g *LogsGenerator) NextPoll() time.Time { return g.nextPoll }
 
 // Poll returns WorkItems for each log type that needs fetching.
-// Environment logs: one item per unique environment.
-// Build/HTTP logs: one item per deployment with that type enabled.
+// All log types use coverage-driven gap filling.
 func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 	if now.Before(g.nextPoll) {
 		return nil
@@ -120,84 +138,196 @@ func (g *LogsGenerator) Poll(now time.Time) []WorkItem {
 	}
 
 	var items []WorkItem
+	itemCount := 0
 
-	// Environment logs: one per unique environment
+	// Environment logs: coverage-driven gap filling per unique environment
 	if g.types["deployment"] {
+		retentionStart := now.Add(-g.logRetention)
 		seen := make(map[string]bool)
 		for _, t := range targets {
-			if seen[t.EnvironmentID] {
+			if seen[t.EnvironmentID] || itemCount >= g.maxItemsPerPoll {
 				continue
 			}
 			seen[t.EnvironmentID] = true
 
-			cursor := g.store.GetLogCursor(t.EnvironmentID, "environment")
-			params := map[string]any{
-				"afterLimit": g.limit,
-			}
-			if !cursor.IsZero() {
-				params["afterDate"] = cursor.Format(time.RFC3339Nano)
+			coverageKey := CoverageKey(t.EnvironmentID, "log", "environment")
+			existing, err := LoadCoverage(g.store, coverageKey)
+			if err != nil {
+				g.logger.Warn("failed to load env log coverage",
+					"environment_id", t.EnvironmentID, "error", err)
+				continue
 			}
 
-			items = append(items, WorkItem{
-				ID:       "envlogs:" + t.EnvironmentID,
-				Kind:     QueryEnvironmentLogs,
-				TaskType: TaskTypeLogs,
-				AliasKey: t.EnvironmentID,
-				BatchKey: fmt.Sprintf("limit=%d", g.limit),
-				Params:   params,
-			})
+			gaps := FindGaps(existing, retentionStart, now)
+			if len(gaps) == 0 {
+				continue
+			}
+
+			var totalGapDuration time.Duration
+			for _, gap := range gaps {
+				totalGapDuration += gap.End.Sub(gap.Start)
+			}
+			g.logger.Debug("env log coverage gaps found",
+				"environment_id", t.EnvironmentID,
+				"gaps", len(gaps),
+				"total_gap_duration", totalGapDuration,
+				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+			)
+
+			prioritized := PrioritizeGaps(gaps, now)
+
+			for _, gap := range prioritized {
+				if itemCount >= g.maxItemsPerPoll {
+					break
+				}
+
+				isLiveEdge := now.Sub(gap.End) < time.Minute
+
+				if isLiveEdge {
+					// Open-ended query for live edge
+					params := map[string]any{
+						"afterLimit": g.limit,
+						"afterDate":  gap.Start.Format(time.RFC3339Nano),
+					}
+					items = append(items, WorkItem{
+						ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, gap.Start.Format(time.RFC3339)),
+						Kind:     QueryEnvironmentLogs,
+						TaskType: TaskTypeLogs,
+						AliasKey: t.EnvironmentID,
+						BatchKey: fmt.Sprintf("limit=%d", g.limit),
+						Params:   params,
+					})
+					itemCount++
+				} else {
+					// Older gap: chunk for batching
+					chunks := alignedChunks(gap, g.chunkSize)
+					for _, chunk := range chunks {
+						if itemCount >= g.maxItemsPerPoll {
+							break
+						}
+						items = append(items, WorkItem{
+							ID:       fmt.Sprintf("envlogs:%s:%s", t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
+							Kind:     QueryEnvironmentLogs,
+							TaskType: TaskTypeLogs,
+							AliasKey: t.EnvironmentID,
+							BatchKey: fmt.Sprintf("limit=%d,s=%s,e=%s",
+								g.limit, chunk.Start.Format(time.RFC3339), chunk.End.Format(time.RFC3339)),
+							Params: map[string]any{
+								"afterDate":  chunk.Start.Format(time.RFC3339Nano),
+								"beforeDate": chunk.End.Format(time.RFC3339Nano),
+								"afterLimit": g.limit,
+							},
+						})
+						itemCount++
+					}
+				}
+			}
 		}
 	}
 
-	// Build logs: one per deployment
+	// Build logs: coverage-driven gap filling (per deployment)
 	if g.types["build"] {
+		retentionStart := now.Add(-g.logRetention)
 		for _, t := range targets {
-			if t.DeploymentID == "" {
+			if t.DeploymentID == "" || itemCount >= g.maxItemsPerPoll {
 				continue
 			}
 
-			cursor := g.store.GetLogCursor(t.DeploymentID, "build")
-			params := map[string]any{
-				"limit": g.limit,
-			}
-			if !cursor.IsZero() {
-				params["startDate"] = cursor.Format(time.RFC3339Nano)
+			coverageKey := CoverageKey(t.DeploymentID, "log", "build")
+			existing, err := LoadCoverage(g.store, coverageKey)
+			if err != nil {
+				g.logger.Warn("failed to load build log coverage",
+					"deployment_id", t.DeploymentID, "error", err)
+				continue
 			}
 
-			items = append(items, WorkItem{
-				ID:       "buildlogs:" + t.DeploymentID,
-				Kind:     QueryBuildLogs,
-				TaskType: TaskTypeLogs,
-				AliasKey: t.DeploymentID,
-				BatchKey: fmt.Sprintf("limit=%d", g.limit),
-				Params:   params,
-			})
+			gaps := FindGaps(existing, retentionStart, now)
+			if len(gaps) == 0 {
+				continue
+			}
+
+			var totalGapDuration time.Duration
+			for _, gap := range gaps {
+				totalGapDuration += gap.End.Sub(gap.Start)
+			}
+			g.logger.Debug("build log coverage gaps found",
+				"deployment_id", t.DeploymentID,
+				"gaps", len(gaps),
+				"total_gap_duration", totalGapDuration,
+				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+			)
+
+			prioritized := PrioritizeGaps(gaps, now)
+			for _, gap := range prioritized {
+				if itemCount >= g.maxItemsPerPoll {
+					break
+				}
+				items = append(items, WorkItem{
+					ID:       fmt.Sprintf("buildlogs:%s:%s", t.DeploymentID, gap.Start.Format(time.RFC3339)),
+					Kind:     QueryBuildLogs,
+					TaskType: TaskTypeLogs,
+					AliasKey: t.DeploymentID,
+					BatchKey: fmt.Sprintf("limit=%d", g.limit),
+					Params: map[string]any{
+						"limit":     g.limit,
+						"startDate": gap.Start.Format(time.RFC3339Nano),
+					},
+				})
+				itemCount++
+			}
 		}
 	}
 
-	// HTTP logs: one per deployment
+	// HTTP logs: coverage-driven gap filling (per deployment)
 	if g.types["http"] {
+		retentionStart := now.Add(-g.logRetention)
 		for _, t := range targets {
-			if t.DeploymentID == "" {
+			if t.DeploymentID == "" || itemCount >= g.maxItemsPerPoll {
 				continue
 			}
 
-			cursor := g.store.GetLogCursor(t.DeploymentID, "http")
-			params := map[string]any{
-				"limit": g.limit,
-			}
-			if !cursor.IsZero() {
-				params["startDate"] = cursor.Format(time.RFC3339Nano)
+			coverageKey := CoverageKey(t.DeploymentID, "log", "http")
+			existing, err := LoadCoverage(g.store, coverageKey)
+			if err != nil {
+				g.logger.Warn("failed to load HTTP log coverage",
+					"deployment_id", t.DeploymentID, "error", err)
+				continue
 			}
 
-			items = append(items, WorkItem{
-				ID:       "httplogs:" + t.DeploymentID,
-				Kind:     QueryHttpLogs,
-				TaskType: TaskTypeLogs,
-				AliasKey: t.DeploymentID,
-				BatchKey: fmt.Sprintf("limit=%d", g.limit),
-				Params:   params,
-			})
+			gaps := FindGaps(existing, retentionStart, now)
+			if len(gaps) == 0 {
+				continue
+			}
+
+			var totalGapDuration time.Duration
+			for _, gap := range gaps {
+				totalGapDuration += gap.End.Sub(gap.Start)
+			}
+			g.logger.Debug("HTTP log coverage gaps found",
+				"deployment_id", t.DeploymentID,
+				"gaps", len(gaps),
+				"total_gap_duration", totalGapDuration,
+				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+			)
+
+			prioritized := PrioritizeGaps(gaps, now)
+			for _, gap := range prioritized {
+				if itemCount >= g.maxItemsPerPoll {
+					break
+				}
+				items = append(items, WorkItem{
+					ID:       fmt.Sprintf("httplogs:%s:%s", t.DeploymentID, gap.Start.Format(time.RFC3339)),
+					Kind:     QueryHttpLogs,
+					TaskType: TaskTypeLogs,
+					AliasKey: t.DeploymentID,
+					BatchKey: fmt.Sprintf("limit=%d", g.limit),
+					Params: map[string]any{
+						"limit":     g.limit,
+						"startDate": gap.Start.Format(time.RFC3339Nano),
+					},
+				})
+				itemCount++
+			}
 		}
 	}
 
@@ -231,6 +361,7 @@ func (g *LogsGenerator) Deliver(ctx context.Context, item WorkItem, data json.Ra
 
 func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkItem, data json.RawMessage) {
 	envID := item.AliasKey
+	now := g.clock.Now().UTC()
 	targets := g.discovery.Targets()
 
 	services, envName := environmentServiceLookup(envID, targets)
@@ -306,24 +437,32 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 			Attributes: attrs,
 		})
 
+		g.logger.Log(ctx, logging.LevelTrace, "log entry",
+			"log_type", "deployment",
+			"environment_id", envID,
+			"timestamp", ts.Format(time.RFC3339Nano),
+		)
+
 		if ts.After(maxTS) {
 			maxTS = ts
 		}
 	}
 
-	if !maxTS.IsZero() {
-		if cursorErr := g.store.SetLogCursor(envID, "environment", maxTS); cursorErr != nil {
-			g.logger.Error("failed to persist log cursor",
-				"environment", envName, "environment_id", envID, "error", cursorErr)
-		}
+	// Record coverage using params (afterDate/beforeDate) as boundaries
+	afterDateStr, _ := item.Params["afterDate"].(string)
+	covStart, _ := time.Parse(time.RFC3339Nano, afterDateStr)
 
-		// Record coverage
-		covStart := maxTS.Add(-time.Hour) // fallback
-		if afterDate, ok := item.Params["afterDate"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, afterDate); parseErr == nil {
-				covStart = parsed
-			}
+	// End time: use beforeDate if present (chunked gap), otherwise use now or maxTS
+	covEnd := now
+	if beforeDateStr, ok := item.Params["beforeDate"].(string); ok {
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, beforeDateStr); parseErr == nil {
+			covEnd = parsed
 		}
+	} else if !maxTS.IsZero() {
+		covEnd = maxTS
+	}
+
+	if !covStart.IsZero() {
 		coverageKey := CoverageKey(envID, "log", "environment")
 		existing, covErr := LoadCoverage(g.store, coverageKey)
 		if covErr == nil {
@@ -332,7 +471,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 				kind = CoverageEmpty
 			}
 			updated := InsertInterval(existing, CoverageInterval{
-				Start: covStart, End: maxTS, Kind: kind,
+				Start: covStart, End: covEnd, Kind: kind,
 			})
 			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
 				g.logger.Warn("failed to save log coverage",
@@ -341,14 +480,20 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item WorkIte
 		}
 	}
 
-	g.logger.Debug("environment logs delivered",
+	level := slog.LevelDebug
+	if len(entries) == 0 {
+		level = logging.LevelTrace
+	}
+	g.logger.Log(ctx, level, "environment logs delivered",
 		"environment", envName, "environment_id", envID, "entries", len(entries),
-		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
+		"start", afterDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
-	for _, s := range g.sinks {
-		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
-			g.logger.Error("failed to write logs to sink",
-				"sink", s.Name(), "environment", envName, "error", sinkErr)
+	if len(entries) > 0 {
+		for _, s := range g.sinks {
+			if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
+				g.logger.Error("failed to write logs to sink",
+					"sink", s.Name(), "environment", envName, "error", sinkErr)
+			}
 		}
 	}
 }
@@ -393,22 +538,51 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item WorkItem, dat
 			Severity: sev, Labels: labels, Attributes: attrs,
 		})
 
+		g.logger.Log(ctx, logging.LevelTrace, "log entry",
+			"log_type", "build",
+			"deployment_id", deploymentID,
+			"timestamp", ts.Format(time.RFC3339Nano),
+		)
+
 		if ts.After(maxTS) {
 			maxTS = ts
 		}
 	}
 
-	if !maxTS.IsZero() {
-		if cursorErr := g.store.SetLogCursor(deploymentID, "build", maxTS); cursorErr != nil {
-			g.logger.Error("failed to persist build log cursor",
-				"deployment_id", deploymentID, "error", cursorErr)
-		}
+	// Record coverage using params (startDate) as boundaries
+	startDateStr, _ := item.Params["startDate"].(string)
+	covStart, _ := time.Parse(time.RFC3339Nano, startDateStr)
 
-		g.recordDeploymentLogCoverage(deploymentID, "build", item, maxTS)
+	now := g.clock.Now().UTC()
+	covEnd := now
+	if !maxTS.IsZero() {
+		covEnd = maxTS
 	}
 
-	g.logger.Debug("build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
-		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
+	if !covStart.IsZero() {
+		coverageKey := CoverageKey(deploymentID, "log", "build")
+		existing, covErr := LoadCoverage(g.store, coverageKey)
+		if covErr == nil {
+			kind := CoverageCollected
+			if len(entries) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start: covStart, End: covEnd, Kind: kind,
+			})
+			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
+				g.logger.Warn("failed to save build log coverage",
+					"deployment_id", deploymentID, "error", saveErr)
+			}
+		}
+	}
+
+	level := slog.LevelDebug
+	if len(entries) == 0 {
+		level = logging.LevelTrace
+	}
+	g.logger.Log(ctx, level, "build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
+		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
 	for _, s := range g.sinks {
 		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
@@ -470,56 +644,58 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item WorkItem, data
 			Severity: sev, Labels: labels, Attributes: attrs,
 		})
 
+		g.logger.Log(ctx, logging.LevelTrace, "log entry",
+			"log_type", "http",
+			"deployment_id", deploymentID,
+			"method", log.Method,
+			"status", log.HttpStatus,
+			"timestamp", ts.Format(time.RFC3339Nano),
+		)
+
 		if ts.After(maxTS) {
 			maxTS = ts
 		}
 	}
 
-	if !maxTS.IsZero() {
-		if cursorErr := g.store.SetLogCursor(deploymentID, "http", maxTS); cursorErr != nil {
-			g.logger.Error("failed to persist HTTP log cursor",
-				"deployment_id", deploymentID, "error", cursorErr)
-		}
+	// Record coverage using params (startDate) as boundaries
+	startDateStr, _ := item.Params["startDate"].(string)
+	covStart, _ := time.Parse(time.RFC3339Nano, startDateStr)
 
-		g.recordDeploymentLogCoverage(deploymentID, "http", item, maxTS)
+	now := g.clock.Now().UTC()
+	covEnd := now
+	if !maxTS.IsZero() {
+		covEnd = maxTS
 	}
 
-	g.logger.Debug("HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
-		"cursor_advanced_to", maxTS.Format(time.RFC3339Nano))
+	if !covStart.IsZero() {
+		coverageKey := CoverageKey(deploymentID, "log", "http")
+		existing, covErr := LoadCoverage(g.store, coverageKey)
+		if covErr == nil {
+			kind := CoverageCollected
+			if len(entries) == 0 {
+				kind = CoverageEmpty
+			}
+			updated := InsertInterval(existing, CoverageInterval{
+				Start: covStart, End: covEnd, Kind: kind,
+			})
+			if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
+				g.logger.Warn("failed to save HTTP log coverage",
+					"deployment_id", deploymentID, "error", saveErr)
+			}
+		}
+	}
+
+	level := slog.LevelDebug
+	if len(entries) == 0 {
+		level = logging.LevelTrace
+	}
+	g.logger.Log(ctx, level, "HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
+		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
 
 	for _, s := range g.sinks {
 		if sinkErr := s.WriteLogs(ctx, entries); sinkErr != nil {
 			g.logger.Error("failed to write HTTP logs to sink",
 				"sink", s.Name(), "deployment_id", deploymentID, "error", sinkErr)
 		}
-	}
-}
-
-// recordDeploymentLogCoverage records coverage for build/HTTP logs.
-func (g *LogsGenerator) recordDeploymentLogCoverage(deploymentID, logType string, item WorkItem, maxTS time.Time) {
-	var covStart time.Time
-	if startDate, ok := item.Params["startDate"].(string); ok {
-		if parsed, err := time.Parse(time.RFC3339Nano, startDate); err == nil {
-			covStart = parsed
-		}
-	}
-	if covStart.IsZero() {
-		covStart = maxTS.Add(-time.Hour)
-	}
-
-	coverageKey := CoverageKey(deploymentID, "log", logType)
-	existing, covErr := LoadCoverage(g.store, coverageKey)
-	if covErr != nil {
-		g.logger.Warn("failed to load log coverage",
-			"deployment_id", deploymentID, "log_type", logType, "error", covErr)
-		return
-	}
-
-	updated := InsertInterval(existing, CoverageInterval{
-		Start: covStart, End: maxTS, Kind: CoverageCollected,
-	})
-	if saveErr := SaveCoverage(g.store, coverageKey, updated); saveErr != nil {
-		g.logger.Warn("failed to save log coverage",
-			"deployment_id", deploymentID, "log_type", logType, "error", saveErr)
 	}
 }

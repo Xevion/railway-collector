@@ -45,6 +45,9 @@ func Open(path string) (*Store, error) {
 
 // GetLogCursor returns the last-seen timestamp for a deployment+logType pair.
 // Returns zero time if not found.
+//
+// Deprecated: Log cursors are no longer used by the collector (replaced by
+// coverage-driven gap filling). Retained for reading existing data and tests.
 func (s *Store) GetLogCursor(deploymentID, logType string) time.Time {
 	key := []byte(deploymentID + ":" + logType)
 	var ts time.Time
@@ -60,6 +63,9 @@ func (s *Store) GetLogCursor(deploymentID, logType string) time.Time {
 
 // SetLogCursor persists the last-seen timestamp for a deployment+logType pair.
 // Only updates if the new timestamp is after the existing one.
+//
+// Deprecated: Log cursors are no longer used by the collector (replaced by
+// coverage-driven gap filling). Retained for reading existing data and tests.
 func (s *Store) SetLogCursor(deploymentID, logType string, ts time.Time) error {
 	key := []byte(deploymentID + ":" + logType)
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -70,29 +76,6 @@ func (s *Store) SetLogCursor(deploymentID, logType string, ts time.Time) error {
 			}
 		}
 		return b.Put(key, []byte(ts.Format(time.RFC3339Nano)))
-	})
-}
-
-// GetMetricCursor returns the last metric fetch timestamp for a project.
-// Returns zero time if not found.
-func (s *Store) GetMetricCursor(projectID string) time.Time {
-	key := []byte(projectID)
-	var ts time.Time
-	s.db.View(func(tx *bolt.Tx) error {
-		v := tx.Bucket(metricCursorBucket).Get(key)
-		if v != nil {
-			ts, _ = time.Parse(time.RFC3339Nano, string(v))
-		}
-		return nil
-	})
-	return ts
-}
-
-// SetMetricCursor persists the last metric fetch timestamp for a project.
-func (s *Store) SetMetricCursor(projectID string, ts time.Time) error {
-	key := []byte(projectID)
-	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(metricCursorBucket).Put(key, []byte(ts.Format(time.RFC3339Nano)))
 	})
 }
 

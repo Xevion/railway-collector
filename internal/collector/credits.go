@@ -1,21 +1,22 @@
 package collector
 
 import (
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/xevion/railway-collector/internal/logging"
 )
 
 // Regime describes how aggressively the scheduler should use API budget.
 type Regime int
 
 const (
-	// RegimeAbundant: >50% of hourly limit remaining. Full rate, backfill active.
+	// RegimeAbundant: >50% of hourly limit remaining. Full rate, all gap-filling active.
 	RegimeAbundant Regime = iota
-	// RegimeNormal: 10-50% remaining. Full rate, backfill scales down.
+	// RegimeNormal: 10-50% remaining. Full rate, older gap-filling scales down.
 	RegimeNormal
-	// RegimeScarce: <10% remaining. Only realtime tasks get credits.
+	// RegimeScarce: <10% remaining. Only live-edge tasks get credits.
 	RegimeScarce
 	// RegimeExhausted: 0 remaining. All collection paused.
 	RegimeExhausted
@@ -42,7 +43,6 @@ type CreditConfig struct {
 	MetricsRate   float64
 	LogsRate      float64
 	DiscoveryRate float64
-	BackfillRate  float64
 	// Maximum accumulated credits per type (prevents burst after idle)
 	MaxCredits float64
 }
@@ -50,10 +50,9 @@ type CreditConfig struct {
 // DefaultCreditConfig returns the default credit allocation.
 func DefaultCreditConfig() CreditConfig {
 	return CreditConfig{
-		MetricsRate:   2.0,  // 1 batched request every 30s
-		LogsRate:      2.0,  // 1 env logs + 1 deployment logs every 30s
-		DiscoveryRate: 1.0,  // 1/min, mostly unused (TTL cached)
-		BackfillRate:  11.0, // absorbs remaining budget
+		MetricsRate:   8.0, // absorbs most budget (metrics + gap filling)
+		LogsRate:      6.0, // env log gap filling + build/http logs
+		DiscoveryRate: 1.0, // 1/min, mostly unused (TTL cached)
 		MaxCredits:    4.0,
 	}
 }
@@ -120,7 +119,6 @@ func NewCreditAllocator(cfg CreditConfig, now time.Time, logger *slog.Logger) *C
 			TaskTypeMetrics:   newCreditPool(cfg.MetricsRate, cfg.MaxCredits, now),
 			TaskTypeLogs:      newCreditPool(cfg.LogsRate, cfg.MaxCredits, now),
 			TaskTypeDiscovery: newCreditPool(cfg.DiscoveryRate, cfg.MaxCredits, now),
-			TaskTypeBackfill:  newCreditPool(cfg.BackfillRate, cfg.MaxCredits, now),
 		},
 		config: cfg,
 		regime: RegimeAbundant,
@@ -195,7 +193,7 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 		"to", newRegime.String(),
 		"remaining", remaining,
 		"limit", limit,
-		slog.String("budget_pct", fmt.Sprintf("%.1f%%", ratio*100)),
+		slog.Any("budget_pct", logging.Pct(ratio*100)),
 	)
 
 	switch newRegime {
@@ -205,24 +203,19 @@ func (ca *CreditAllocator) UpdateRegime(remaining, limit int, secondsUntilReset 
 			pool.setRate(0)
 		}
 	case RegimeScarce:
-		// Only realtime gets credits
-		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
-		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
+		// Reduced rates under pressure
+		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate * 0.5)
+		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate * 0.5)
 		ca.pools[TaskTypeDiscovery].setRate(0)
-		ca.pools[TaskTypeBackfill].setRate(0)
 	case RegimeNormal:
-		// Full realtime, scaled backfill
+		// Full rate, discovery scaled
 		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
 		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
 		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
-		// Scale backfill proportionally to remaining budget
-		backfillScale := ratio / 0.5 // 0.0 at 10%, 1.0 at 50%
-		ca.pools[TaskTypeBackfill].setRate(ca.config.BackfillRate * backfillScale)
 	case RegimeAbundant:
 		// Full rate for everything
 		ca.pools[TaskTypeMetrics].setRate(ca.config.MetricsRate)
 		ca.pools[TaskTypeLogs].setRate(ca.config.LogsRate)
 		ca.pools[TaskTypeDiscovery].setRate(ca.config.DiscoveryRate)
-		ca.pools[TaskTypeBackfill].setRate(ca.config.BackfillRate)
 	}
 }

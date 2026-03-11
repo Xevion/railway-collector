@@ -31,44 +31,41 @@ func TestMetricsGenerator_Poll_EmitsItemsPerProject(t *testing.T) {
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
 	now := fakeClock.Now()
-	cursor1 := now.Add(-5 * time.Minute)
-	cursor2 := now.Add(-3 * time.Minute)
 
 	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
 		{ProjectID: "proj-1", ProjectName: "one", ServiceID: "svc-1", EnvironmentID: "env-1"},
 		{ProjectID: "proj-2", ProjectName: "two", ServiceID: "svc-2", EnvironmentID: "env-2"},
 	})
 
-	store.EXPECT().GetMetricCursor("proj-1").Return(cursor1)
-	store.EXPECT().GetMetricCursor("proj-2").Return(cursor2)
+	// No coverage -- gaps exist for both projects
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
-		Discovery:    targets,
-		Store:        store,
-		Clock:        fakeClock,
-		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:   30,
-		AvgWindow:    30,
-		Lookback:     10 * time.Minute,
-		Interval:     30 * time.Second,
-		Logger:       slog.Default(),
+		Discovery:       targets,
+		Store:           store,
+		Clock:           fakeClock,
+		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		SampleRate:      30,
+		AvgWindow:       30,
+		Interval:        30 * time.Second,
+		MetricRetention: 1 * time.Hour,
+		ChunkSize:       6 * time.Hour,
+		MaxItemsPerPoll: 10,
+		Logger:          slog.Default(),
 	})
 
 	items := gen.Poll(now)
-	require.Len(t, items, 2)
+	require.NotEmpty(t, items)
 
-	assert.Equal(t, "metrics:proj-1", items[0].ID)
-	assert.Equal(t, collector.QueryMetrics, items[0].Kind)
-	assert.Equal(t, collector.TaskTypeMetrics, items[0].TaskType)
-	assert.Equal(t, "proj-1", items[0].AliasKey)
-	assert.Equal(t, cursor1.Format(time.RFC3339), items[0].Params["startDate"])
-
-	assert.Equal(t, "metrics:proj-2", items[1].ID)
-	assert.Equal(t, "proj-2", items[1].AliasKey)
-	assert.Equal(t, cursor2.Format(time.RFC3339), items[1].Params["startDate"])
-
-	// Both items should share the same batch key
-	assert.Equal(t, items[0].BatchKey, items[1].BatchKey)
+	// Should have items for both projects
+	projectIDs := make(map[string]bool)
+	for _, item := range items {
+		assert.Equal(t, collector.QueryMetrics, item.Kind)
+		assert.Equal(t, collector.TaskTypeMetrics, item.TaskType)
+		projectIDs[item.AliasKey] = true
+	}
+	assert.True(t, projectIDs["proj-1"], "should have items for proj-1")
+	assert.True(t, projectIDs["proj-2"], "should have items for proj-2")
 }
 
 func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
@@ -82,23 +79,24 @@ func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	}).AnyTimes()
-	store.EXPECT().GetMetricCursor("proj-1").Return(now.Add(-5 * time.Minute)).AnyTimes()
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
-		Discovery:    targets,
-		Store:        store,
-		Clock:        fakeClock,
-		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:   30,
-		AvgWindow:    30,
-		Lookback:     10 * time.Minute,
-		Interval:     30 * time.Second,
-		Logger:       slog.Default(),
+		Discovery:       targets,
+		Store:           store,
+		Clock:           fakeClock,
+		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		SampleRate:      30,
+		AvgWindow:       30,
+		Interval:        30 * time.Second,
+		MetricRetention: 1 * time.Hour,
+		MaxItemsPerPoll: 10,
+		Logger:          slog.Default(),
 	})
 
 	// First poll should return items
 	items := gen.Poll(now)
-	require.Len(t, items, 1)
+	require.NotEmpty(t, items)
 
 	// Immediate second poll should return nil (interval not elapsed)
 	items = gen.Poll(now.Add(1 * time.Second))
@@ -106,41 +104,46 @@ func TestMetricsGenerator_Poll_RespectsInterval(t *testing.T) {
 
 	// After interval, should return items again
 	items = gen.Poll(now.Add(30 * time.Second))
-	require.Len(t, items, 1)
+	require.NotEmpty(t, items)
 }
 
-func TestMetricsGenerator_Poll_NoCursor_FallsBackToLookback(t *testing.T) {
+func TestMetricsGenerator_Poll_NoCoverage_ScansFullRetention(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := mocks.NewMockStateStore(ctrl)
 	targets := mocks.NewMockTargetProvider(ctrl)
 	fakeClock := clockwork.NewFakeClockAt(time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC))
 
 	now := fakeClock.Now()
-	lookback := 10 * time.Minute
+	retention := 1 * time.Hour
 
 	targets.EXPECT().Targets().Return([]collector.ServiceTarget{
 		{ProjectID: "proj-1", ServiceID: "svc-1", EnvironmentID: "env-1"},
 	})
 
-	store.EXPECT().GetMetricCursor("proj-1").Return(time.Time{})
+	// No coverage at all
+	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
-		Discovery:    targets,
-		Store:        store,
-		Clock:        fakeClock,
-		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
-		SampleRate:   30,
-		AvgWindow:    30,
-		Lookback:     lookback,
-		Interval:     30 * time.Second,
-		Logger:       slog.Default(),
+		Discovery:       targets,
+		Store:           store,
+		Clock:           fakeClock,
+		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
+		SampleRate:      30,
+		AvgWindow:       30,
+		Interval:        30 * time.Second,
+		MetricRetention: retention,
+		MaxItemsPerPoll: 10,
+		Logger:          slog.Default(),
 	})
 
 	items := gen.Poll(now)
-	require.Len(t, items, 1)
+	require.NotEmpty(t, items)
 
-	expectedStart := now.Add(-lookback).Format(time.RFC3339)
-	assert.Equal(t, expectedStart, items[0].Params["startDate"])
+	// The live edge gap should be prioritized first (most recent)
+	// All items should be for proj-1
+	for _, item := range items {
+		assert.Equal(t, "proj-1", item.AliasKey)
+	}
 }
 
 func TestMetricsGenerator_Poll_NoTargets_ReturnsNil(t *testing.T) {
@@ -179,9 +182,7 @@ func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 		EnvironmentName: "production",
 	}})
 
-	// Expect cursor update
-	store.EXPECT().SetMetricCursor(projectID, now.UTC()).Return(nil)
-	// Expect coverage recording
+	// Expect coverage recording (no cursor update)
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
 	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -194,16 +195,16 @@ func TestMetricsGenerator_Deliver_ProcessesResults(t *testing.T) {
 	}
 
 	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
-		Discovery:    targets,
-		Store:        store,
-		Sinks:        []sink.Sink{fakeSink},
-		Clock:        fakeClock,
-		Measurements: []railway.MetricMeasurement{railway.MetricMeasurementMemoryUsageGb},
-		SampleRate:   30,
-		AvgWindow:    30,
-		Lookback:     10 * time.Minute,
-		Interval:     30 * time.Second,
-		Logger:       slog.Default(),
+		Discovery:       targets,
+		Store:           store,
+		Sinks:           []sink.Sink{fakeSink},
+		Clock:           fakeClock,
+		Measurements:    []railway.MetricMeasurement{railway.MetricMeasurementMemoryUsageGb},
+		SampleRate:      30,
+		AvgWindow:       30,
+		Interval:        30 * time.Second,
+		MetricRetention: 1 * time.Hour,
+		Logger:          slog.Default(),
 	})
 
 	// Simulate raw JSON response for one project's metrics
@@ -290,24 +291,14 @@ func TestMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 		{ProjectID: projectID, ProjectName: "test"},
 	})
 
-	store.EXPECT().SetMetricCursor(projectID, now.UTC()).Return(nil)
+	// Coverage should still be updated even with empty results
 	store.EXPECT().GetCoverage(gomock.Any()).Return(nil, nil)
 	store.EXPECT().SetCoverage(gomock.Any(), gomock.Any()).Return(nil)
-
-	sinkCalled := false
-	fakeSink := &recordingSink{
-		writeMetrics: func(_ context.Context, pts []sink.MetricPoint) error {
-			sinkCalled = true
-			return nil
-		},
-	}
 
 	gen := collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
 		Discovery: targets,
 		Store:     store,
-		Sinks:     []sink.Sink{fakeSink},
 		Clock:     fakeClock,
-		Lookback:  10 * time.Minute,
 		Interval:  30 * time.Second,
 		Logger:    slog.Default(),
 	})
@@ -322,8 +313,5 @@ func TestMetricsGenerator_Deliver_EmptyResults(t *testing.T) {
 	}
 
 	gen.Deliver(context.Background(), item, data, nil)
-
-	// Cursor and coverage should still be updated even with empty results
-	// Sink should be called (with empty slice)
-	assert.True(t, sinkCalled)
+	// No panic, coverage updated (gomock verifies SetCoverage was called)
 }

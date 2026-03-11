@@ -38,7 +38,7 @@ type CollectConfig struct {
 	Metrics   MetricsCollectConfig   `koanf:"metrics"`
 	Logs      LogsCollectConfig      `koanf:"logs"`
 	Discovery DiscoveryCollectConfig `koanf:"discovery"`
-	Backfill  BackfillCollectConfig  `koanf:"backfill"`
+	GapFill   GapFillConfig          `koanf:"gap_fill"`
 	Scheduler SchedulerConfig        `koanf:"scheduler"`
 	Credits   CreditsConfig          `koanf:"credits"`
 }
@@ -57,13 +57,13 @@ type CreditsConfig struct {
 	MetricsRate   float64 `koanf:"metrics_rate"`
 	LogsRate      float64 `koanf:"logs_rate"`
 	DiscoveryRate float64 `koanf:"discovery_rate"`
-	BackfillRate  float64 `koanf:"backfill_rate"`
 	// Maximum accumulated credits per type (prevents burst after idle)
 	MaxCredits float64 `koanf:"max_credits"`
 }
 
-type BackfillCollectConfig struct {
-	Enabled         bool          `koanf:"enabled"`
+// GapFillConfig configures gap-filling behavior for metrics and logs.
+// Gap filling is integrated into the metrics and logs generators directly.
+type GapFillConfig struct {
 	MetricChunkSize time.Duration `koanf:"metric_chunk_size"`
 	MetricRetention time.Duration `koanf:"metric_retention"`
 	LogRetention    time.Duration `koanf:"log_retention"`
@@ -91,8 +91,6 @@ type MetricsCollectConfig struct {
 	Measurements           []string      `koanf:"measurements"`
 	SampleRateSeconds      int           `koanf:"sample_rate_seconds"`
 	AveragingWindowSeconds int           `koanf:"averaging_window_seconds"`
-	// How far back to look on each scrape
-	Lookback time.Duration `koanf:"lookback"`
 }
 
 type LogsCollectConfig struct {
@@ -142,7 +140,6 @@ func DefaultConfig() *Config {
 				Measurements:           []string{"cpu", "memory", "network_rx", "network_tx", "disk"},
 				SampleRateSeconds:      60,
 				AveragingWindowSeconds: 60,
-				Lookback:               10 * time.Minute,
 			},
 			Logs: LogsCollectConfig{
 				Enabled:  true,
@@ -158,8 +155,7 @@ func DefaultConfig() *Config {
 				ProjectListTTL:  4 * time.Hour,
 				Jitter:          15 * time.Minute,
 			},
-			Backfill: BackfillCollectConfig{
-				Enabled:         true,
+			GapFill: GapFillConfig{
 				MetricChunkSize: 10 * 24 * time.Hour,
 				MetricRetention: 90 * 24 * time.Hour,
 				LogRetention:    5 * 24 * time.Hour,
@@ -169,10 +165,9 @@ func DefaultConfig() *Config {
 				// Zero values use code defaults (1s tick, ~16/min RPS, 5s drain)
 			},
 			Credits: CreditsConfig{
-				MetricsRate:   2.0,
-				LogsRate:      2.0,
+				MetricsRate:   8.0,
+				LogsRate:      6.0,
 				DiscoveryRate: 1.0,
-				BackfillRate:  11.0,
 				MaxCredits:    4.0,
 			},
 		},

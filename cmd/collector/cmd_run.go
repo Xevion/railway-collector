@@ -164,7 +164,6 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		MetricsRate:   cfg.Collect.Credits.MetricsRate,
 		LogsRate:      cfg.Collect.Credits.LogsRate,
 		DiscoveryRate: cfg.Collect.Credits.DiscoveryRate,
-		BackfillRate:  cfg.Collect.Credits.BackfillRate,
 		MaxCredits:    cfg.Collect.Credits.MaxCredits,
 	}
 	credits := collector.NewCreditAllocator(creditCfg, now, logger)
@@ -174,29 +173,34 @@ func (cmd *RunCmd) Run(c *CLI) error {
 
 	if cfg.Collect.Metrics.Enabled {
 		generators = append(generators, collector.NewMetricsGenerator(collector.MetricsGeneratorConfig{
-			Discovery:    discovery,
-			Store:        store,
-			Sinks:        sinks,
-			Clock:        realClock,
-			Measurements: measurements,
-			SampleRate:   cfg.Collect.Metrics.SampleRateSeconds,
-			AvgWindow:    cfg.Collect.Metrics.AveragingWindowSeconds,
-			Lookback:     cfg.Collect.Metrics.Lookback,
-			Interval:     cfg.Collect.Metrics.Interval,
-			Logger:       logger,
+			Discovery:       discovery,
+			Store:           store,
+			Sinks:           sinks,
+			Clock:           realClock,
+			Measurements:    measurements,
+			SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
+			AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
+			Interval:        cfg.Collect.Metrics.Interval,
+			MetricRetention: cfg.Collect.GapFill.MetricRetention,
+			ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+			Logger:          logger,
 		}))
 	}
 
 	if cfg.Collect.Logs.Enabled {
 		generators = append(generators, collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-			Discovery: discovery,
-			Store:     store,
-			Sinks:     sinks,
-			Clock:     realClock,
-			Types:     cfg.Collect.Logs.Types,
-			Limit:     cfg.Collect.Logs.Limit,
-			Interval:  cfg.Collect.Logs.Interval,
-			Logger:    logger,
+			Discovery:       discovery,
+			Store:           store,
+			Sinks:           sinks,
+			Clock:           realClock,
+			Types:           cfg.Collect.Logs.Types,
+			Limit:           cfg.Collect.Logs.Limit,
+			Interval:        cfg.Collect.Logs.Interval,
+			LogRetention:    cfg.Collect.GapFill.LogRetention,
+			ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
+			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
+			Logger:          logger,
 		}))
 	}
 
@@ -208,24 +212,6 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		}))
 	}
 
-	if cfg.Collect.Backfill.Enabled {
-		generators = append(generators, collector.NewBackfillGenerator(collector.BackfillGeneratorConfig{
-			Discovery:       discovery,
-			Store:           store,
-			Sinks:           sinks,
-			Clock:           realClock,
-			Measurements:    measurements,
-			SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-			AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-			MetricRetention: cfg.Collect.Backfill.MetricRetention,
-			LogRetention:    cfg.Collect.Backfill.LogRetention,
-			ChunkSize:       cfg.Collect.Backfill.MetricChunkSize,
-			MaxItemsPerPoll: cfg.Collect.Backfill.MaxItemsPerPoll,
-			LogLimit:        cfg.Collect.Logs.Limit,
-			Logger:          logger,
-		}))
-	}
-
 	sinkNames := make([]string, len(sinks))
 	for i, s := range sinks {
 		sinkNames[i] = s.Name()
@@ -233,7 +219,6 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	logger.Info("railway collector started",
 		"metrics_enabled", cfg.Collect.Metrics.Enabled,
 		"logs_enabled", cfg.Collect.Logs.Enabled,
-		"backfill_enabled", cfg.Collect.Backfill.Enabled,
 		"targets", len(discovery.Targets()),
 		"generators", len(generators),
 		"sinks", strings.Join(sinkNames, ","),
