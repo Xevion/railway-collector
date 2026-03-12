@@ -458,8 +458,7 @@ func Test_metricsBatchKeyChunk(t *testing.T) {
 		measurements []railway.MetricMeasurement
 		sampleRate   int
 		avgWindow    int
-		chunkStart   time.Time
-		chunkEnd     time.Time
+		chunk        coverage.TimeWindow
 		want         string
 	}{
 		{
@@ -467,8 +466,7 @@ func Test_metricsBatchKeyChunk(t *testing.T) {
 			measurements: []railway.MetricMeasurement{railway.MetricMeasurementCpuUsage},
 			sampleRate:   60,
 			avgWindow:    5,
-			chunkStart:   t0,
-			chunkEnd:     t1,
+			chunk:        coverage.TimeWindow{Start: t0, End: t1},
 			want:         "sr=60,aw=5,m=CPU_USAGE,s=2024-01-15T00:00:00Z,e=2024-01-15T06:00:00Z",
 		},
 		{
@@ -479,8 +477,7 @@ func Test_metricsBatchKeyChunk(t *testing.T) {
 			},
 			sampleRate: 30,
 			avgWindow:  10,
-			chunkStart: t1,
-			chunkEnd:   t2,
+			chunk:      coverage.TimeWindow{Start: t1, End: t2},
 			want:       "sr=30,aw=10,m=CPU_USAGE+MEMORY_USAGE_GB,s=2024-01-15T06:00:00Z,e=2024-01-15T12:00:00Z",
 		},
 		{
@@ -488,15 +485,14 @@ func Test_metricsBatchKeyChunk(t *testing.T) {
 			measurements: []railway.MetricMeasurement{railway.MetricMeasurementNetworkRxGb},
 			sampleRate:   0,
 			avgWindow:    0,
-			chunkStart:   t0,
-			chunkEnd:     t2,
+			chunk:        coverage.TimeWindow{Start: t0, End: t2},
 			want:         "sr=0,aw=0,m=NETWORK_RX_GB,s=2024-01-15T00:00:00Z,e=2024-01-15T12:00:00Z",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := metricsBatchKeyChunk(tt.measurements, tt.sampleRate, tt.avgWindow, tt.chunkStart, tt.chunkEnd)
+			got := metricsBatchKeyChunk(tt.measurements, tt.sampleRate, tt.avgWindow, tt.chunk)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -1002,7 +998,7 @@ func Test_pollCoverageGaps_BudgetExact(t *testing.T) {
 				})
 			}
 
-			builder := func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+			builder := func(e pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 				var items []types.WorkItem
 				for j := 0; j < tt.itemsPerEmit; j++ {
 					items = append(items, types.WorkItem{

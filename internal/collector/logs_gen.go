@@ -167,13 +167,13 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 
 			var totalGapDuration time.Duration
 			for _, gap := range gaps {
-				totalGapDuration += gap.End.Sub(gap.Start)
+				totalGapDuration += gap.Duration()
 			}
 			g.logger.Debug("env log coverage gaps found",
 				"environment_id", t.EnvironmentID,
 				"gaps", len(gaps),
 				"total_gap_duration", totalGapDuration,
-				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+				"oldest_gap", gaps[0],
 			)
 
 			prioritized := coverage.PrioritizeGaps(gaps, now)
@@ -190,7 +190,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 					// portion into fixed chunks and only keep the tail as live edge.
 					gapDuration := gap.End.Sub(gap.Start)
 					if gapDuration > g.chunkSize {
-						olderGap := coverage.TimeRange{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
+						olderGap := coverage.TimeWindow{Start: gap.Start, End: gap.End.Add(-g.chunkSize)}
 						chunks := alignedChunks(olderGap, g.chunkSize)
 						for _, chunk := range chunks {
 							if itemCount >= g.maxItemsPerPoll {
@@ -211,7 +211,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 							})
 							itemCount++
 						}
-						gap = coverage.TimeRange{Start: gap.End.Add(-g.chunkSize), End: gap.End}
+						gap = coverage.TimeWindow{Start: gap.End.Add(-g.chunkSize), End: gap.End}
 					}
 
 					if itemCount >= g.maxItemsPerPoll {
@@ -282,13 +282,13 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 
 			var totalGapDuration time.Duration
 			for _, gap := range gaps {
-				totalGapDuration += gap.End.Sub(gap.Start)
+				totalGapDuration += gap.Duration()
 			}
 			g.logger.Debug("build log coverage gaps found",
 				"deployment_id", t.DeploymentID,
 				"gaps", len(gaps),
 				"total_gap_duration", totalGapDuration,
-				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+				"oldest_gap", gaps[0],
 			)
 
 			prioritized := coverage.PrioritizeGaps(gaps, now)
@@ -335,13 +335,13 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 
 			var totalGapDuration time.Duration
 			for _, gap := range gaps {
-				totalGapDuration += gap.End.Sub(gap.Start)
+				totalGapDuration += gap.Duration()
 			}
 			g.logger.Debug("HTTP log coverage gaps found",
 				"deployment_id", t.DeploymentID,
 				"gaps", len(gaps),
 				"total_gap_duration", totalGapDuration,
-				"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+				"oldest_gap", gaps[0],
 			)
 
 			prioritized := coverage.PrioritizeGaps(gaps, now)
@@ -483,22 +483,14 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item types.W
 	}
 
 	// Record coverage using params (afterDate/beforeDate) as boundaries
-	afterDateStr, _ := item.Params["afterDate"].(string)
-	covStart, _ := time.Parse(time.RFC3339Nano, afterDateStr)
-
-	// End time: use beforeDate if present (chunked gap), otherwise use now or maxTS
-	covEnd := now
-	if beforeDateStr, ok := item.Params["beforeDate"].(string); ok {
-		if parsed, parseErr := time.Parse(time.RFC3339Nano, beforeDateStr); parseErr == nil {
-			covEnd = parsed
-		}
-	} else if !maxTS.IsZero() {
-		covEnd = maxTS
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
+	if hasWindow && window.IsOpen() && !maxTS.IsZero() {
+		window = window.Extend(maxTS)
 	}
 
-	if !covStart.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(envID, coverage.CoverageTypeLogEnv)
-		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update log coverage",
 				"environment", envName, "environment_id", envID, "error", covErr)
 		}
@@ -507,7 +499,7 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item types.W
 	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "environment logs delivered",
 		"environment", envName, "environment_id", envID, "entries", len(entries),
-		"start", afterDateStr, "end", covEnd.Format(time.RFC3339Nano))
+		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
@@ -564,18 +556,15 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item types.WorkIte
 	}
 
 	// Record coverage using params (startDate) as boundaries
-	startDateStr, _ := item.Params["startDate"].(string)
-	covStart, _ := time.Parse(time.RFC3339Nano, startDateStr)
-
 	now := g.clock.Now().UTC()
-	covEnd := now
-	if !maxTS.IsZero() {
-		covEnd = maxTS
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
+	if hasWindow && window.IsOpen() && !maxTS.IsZero() {
+		window = window.Extend(maxTS)
 	}
 
-	if !covStart.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(deploymentID, coverage.CoverageTypeLogBuild)
-		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update build log coverage",
 				"deployment_id", deploymentID, "error", covErr)
 		}
@@ -583,7 +572,7 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item types.WorkIte
 
 	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "build logs delivered", "deployment_id", deploymentID, "entries", len(entries),
-		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
+		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }
@@ -654,18 +643,15 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item types.WorkItem
 	}
 
 	// Record coverage using params (startDate) as boundaries
-	startDateStr, _ := item.Params["startDate"].(string)
-	covStart, _ := time.Parse(time.RFC3339Nano, startDateStr)
-
 	now := g.clock.Now().UTC()
-	covEnd := now
-	if !maxTS.IsZero() {
-		covEnd = maxTS
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
+	if hasWindow && window.IsOpen() && !maxTS.IsZero() {
+		window = window.Extend(maxTS)
 	}
 
-	if !covStart.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(deploymentID, coverage.CoverageTypeLogHTTP)
-		if covErr := updateCoverage(g.store, covKey, covStart, covEnd, len(entries) == 0, 0); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(entries) == 0, 0); covErr != nil {
 			g.logger.Warn("failed to update HTTP log coverage",
 				"deployment_id", deploymentID, "error", covErr)
 		}
@@ -673,7 +659,7 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item types.WorkItem
 
 	level := deliveryLogLevel(len(entries))
 	g.logger.Log(ctx, level, "HTTP logs delivered", "deployment_id", deploymentID, "entries", len(entries),
-		"start", startDateStr, "end", covEnd.Format(time.RFC3339Nano))
+		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
 }

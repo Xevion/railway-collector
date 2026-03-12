@@ -154,13 +154,13 @@ func TestFindGaps(t *testing.T) {
 		name      string
 		intervals []coverage.CoverageInterval
 		wantLen   int
-		checks    func(t *testing.T, gaps []coverage.TimeRange)
+		checks    func(t *testing.T, gaps []coverage.TimeWindow)
 	}{
 		{
 			name:      "no intervals",
 			intervals: []coverage.CoverageInterval{},
 			wantLen:   1,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart, gaps[0].Start)
 				assert.Equal(t, windowEnd, gaps[0].End)
 			},
@@ -171,7 +171,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart, End: windowEnd, Kind: coverage.CoverageCollected},
 			},
 			wantLen: 0,
-			checks:  func(t *testing.T, gaps []coverage.TimeRange) {},
+			checks:  func(t *testing.T, gaps []coverage.TimeWindow) {},
 		},
 		{
 			name: "gap at start",
@@ -179,7 +179,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart.Add(1 * time.Hour), End: windowEnd, Kind: coverage.CoverageCollected},
 			},
 			wantLen: 1,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart, gaps[0].Start)
 				assert.Equal(t, windowStart.Add(1*time.Hour), gaps[0].End)
 			},
@@ -190,7 +190,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart, End: windowStart.Add(5 * time.Hour), Kind: coverage.CoverageCollected},
 			},
 			wantLen: 1,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart.Add(5*time.Hour), gaps[0].Start)
 				assert.Equal(t, windowEnd, gaps[0].End)
 			},
@@ -202,7 +202,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart.Add(4 * time.Hour), End: windowStart.Add(5 * time.Hour), Kind: coverage.CoverageCollected},
 			},
 			wantLen: 3,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart, gaps[0].Start)
 				assert.Equal(t, windowStart.Add(1*time.Hour), gaps[0].End)
 				assert.Equal(t, windowStart.Add(2*time.Hour), gaps[1].Start)
@@ -218,7 +218,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart.Add(2 * time.Hour), End: windowStart.Add(5 * time.Hour), Kind: coverage.CoverageCollected},
 			},
 			wantLen: 1,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart.Add(5*time.Hour), gaps[0].Start)
 				assert.Equal(t, windowEnd, gaps[0].End)
 			},
@@ -229,7 +229,7 @@ func TestFindGaps(t *testing.T) {
 				{Start: windowStart.Add(-2 * time.Hour), End: windowStart.Add(-1 * time.Hour), Kind: coverage.CoverageCollected},
 			},
 			wantLen: 1,
-			checks: func(t *testing.T, gaps []coverage.TimeRange) {
+			checks: func(t *testing.T, gaps []coverage.TimeWindow) {
 				assert.Equal(t, windowStart, gaps[0].Start)
 				assert.Equal(t, windowEnd, gaps[0].End)
 			},
@@ -251,7 +251,7 @@ func TestPrioritizeGaps_RecentFirst(t *testing.T) {
 	now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
 	retentionLimit := now.Add(-90 * 24 * time.Hour)
 
-	gaps := []coverage.TimeRange{
+	gaps := []coverage.TimeWindow{
 		{Start: now.Add(-1 * time.Hour), End: now},                                         // recent (live edge)
 		{Start: retentionLimit.Add(1 * time.Hour), End: retentionLimit.Add(3 * time.Hour)}, // old, near expiry
 	}

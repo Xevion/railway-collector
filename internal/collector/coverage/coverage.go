@@ -34,14 +34,9 @@ type CoverageInterval struct {
 	Resolution int          `json:"resolution,omitempty"` // sampleRateSeconds for metrics, 0 for logs/empty
 }
 
-// TimeRange is a simple start/end pair used for gap representation.
-type TimeRange struct {
-	Start time.Time
-	End   time.Time
-}
-
-func (tr TimeRange) Duration() time.Duration {
-	return tr.End.Sub(tr.Start)
+// ToWindow converts the interval's time bounds to a TimeWindow.
+func (iv CoverageInterval) ToWindow() TimeWindow {
+	return WindowFromInterval(iv)
 }
 
 // MergeIntervals combines adjacent/overlapping intervals with the same Kind and Resolution.
@@ -75,10 +70,10 @@ func InsertInterval(existing []CoverageInterval, newIv CoverageInterval) []Cover
 	return MergeIntervals(all)
 }
 
-// FindGaps returns uncovered time ranges within [windowStart, windowEnd].
-func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []TimeRange {
+// FindGaps returns uncovered time windows within [windowStart, windowEnd].
+func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []TimeWindow {
 	if len(intervals) == 0 {
-		return []TimeRange{{Start: windowStart, End: windowEnd}}
+		return []TimeWindow{NewTimeWindow(windowStart, windowEnd)}
 	}
 
 	sorted := make([]CoverageInterval, len(intervals))
@@ -87,7 +82,7 @@ func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []
 		return sorted[i].Start.Before(sorted[j].Start)
 	})
 
-	var gaps []TimeRange
+	var gaps []TimeWindow
 	cursor := windowStart
 
 	for _, iv := range sorted {
@@ -97,7 +92,7 @@ func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []
 				gapEnd = windowEnd
 			}
 			if cursor.Before(gapEnd) {
-				gaps = append(gaps, TimeRange{Start: cursor, End: gapEnd})
+				gaps = append(gaps, NewTimeWindow(cursor, gapEnd))
 			}
 		}
 		if iv.End.After(cursor) {
@@ -106,7 +101,7 @@ func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []
 	}
 
 	if cursor.Before(windowEnd) {
-		gaps = append(gaps, TimeRange{Start: cursor, End: windowEnd})
+		gaps = append(gaps, NewTimeWindow(cursor, windowEnd))
 	}
 
 	return gaps
@@ -115,15 +110,15 @@ func FindGaps(intervals []CoverageInterval, windowStart, windowEnd time.Time) []
 // PrioritizeGaps sorts gaps by recency: the most recent gap (live edge) always
 // wins, older gaps score lower. Score = 1.0 / max(gap_age_seconds, 1) where
 // gap_age is now minus the gap's end time.
-func PrioritizeGaps(gaps []TimeRange, now time.Time) []TimeRange {
+func PrioritizeGaps(gaps []TimeWindow, now time.Time) []TimeWindow {
 	type scored struct {
-		gap   TimeRange
+		gap   TimeWindow
 		score float64
 	}
 
 	scoredGaps := make([]scored, len(gaps))
 	for i, g := range gaps {
-		ageSecs := now.Sub(g.End).Seconds()
+		ageSecs := g.Age(now).Seconds()
 		if ageSecs < 1 {
 			ageSecs = 1
 		}
@@ -134,7 +129,7 @@ func PrioritizeGaps(gaps []TimeRange, now time.Time) []TimeRange {
 		return scoredGaps[i].score > scoredGaps[j].score
 	})
 
-	result := make([]TimeRange, len(scoredGaps))
+	result := make([]TimeWindow, len(scoredGaps))
 	for i, s := range scoredGaps {
 		result[i] = s.gap
 	}

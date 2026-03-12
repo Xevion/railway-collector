@@ -225,7 +225,7 @@ type gapPollParams struct {
 	// buildItems constructs types.WorkItem(s) for a gap/chunk. Returns 1 item for
 	// most generators, 2 for HTTP (duration + status pair). isLiveEdge tells
 	// the callback whether to omit endDate or use a live batchKey.
-	buildItems func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem
+	buildItems func(entity pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem
 
 	// itemsPerEmit is the budget cost per buildItems call (1 for most, 2 for HTTP).
 	itemsPerEmit int
@@ -278,12 +278,12 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 
 		var totalGapDuration time.Duration
 		for _, gap := range gaps {
-			totalGapDuration += gap.End.Sub(gap.Start)
+			totalGapDuration += gap.Duration()
 		}
 		args := append([]any{
 			"gaps", len(gaps),
 			"total_gap_duration", totalGapDuration,
-			"oldest_gap", gaps[0].Start.Format(time.RFC3339),
+			"oldest_gap", gaps[0],
 		}, entity.LogAttrs...)
 		p.logger.Debug(p.logPrefix+" coverage gaps found", args...)
 
@@ -302,7 +302,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 				// the live-edge query.
 				gapDuration := gap.End.Sub(gap.Start)
 				if gapDuration > p.chunkSize {
-					olderGap := coverage.TimeRange{Start: gap.Start, End: gap.End.Add(-p.chunkSize)}
+					olderGap := coverage.TimeWindow{Start: gap.Start, End: gap.End.Add(-p.chunkSize)}
 					chunks := alignedChunks(olderGap, p.chunkSize)
 					for _, chunk := range chunks {
 						if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -313,7 +313,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 						itemCount += p.itemsPerEmit
 					}
 					// Adjust the live-edge start to the tail
-					gap = coverage.TimeRange{Start: gap.End.Add(-p.chunkSize), End: gap.End}
+					gap = coverage.TimeWindow{Start: gap.End.Add(-p.chunkSize), End: gap.End}
 				}
 
 				if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -423,14 +423,12 @@ func metricsBatchKey(measurements []railway.MetricMeasurement, sampleRate, avgWi
 
 // metricsBatchKeyChunk computes a batch key for a chunked (older gap) query.
 // Includes chunk boundaries so that items for the same time window can be merged.
-func metricsBatchKeyChunk(measurements []railway.MetricMeasurement, sampleRate, avgWindow int, chunkStart, chunkEnd time.Time) string {
+func metricsBatchKeyChunk(measurements []railway.MetricMeasurement, sampleRate, avgWindow int, chunk coverage.TimeWindow) string {
 	var parts []string
 	for _, m := range measurements {
 		parts = append(parts, string(m))
 	}
-	return fmt.Sprintf("sr=%d,aw=%d,m=%s,s=%s,e=%s",
-		sampleRate, avgWindow, strings.Join(parts, "+"),
-		chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339))
+	return fmt.Sprintf("sr=%d,aw=%d,m=%s,%s", sampleRate, avgWindow, strings.Join(parts, "+"), chunk.BatchKey())
 }
 
 // deliveryLogLevel returns LevelTrace for empty deliveries, LevelDebug otherwise.

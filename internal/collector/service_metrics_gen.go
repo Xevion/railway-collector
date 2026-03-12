@@ -84,7 +84,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+		buildItems: func(entity pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 			t := entity.Data.(types.ServiceTarget)
 			params := map[string]any{
 				"serviceId":              t.ServiceID,
@@ -98,7 +98,7 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 			batchKey := metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow)
 			if !isLiveEdge {
 				params["endDate"] = chunk.End.Format(time.RFC3339)
-				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
+				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk)
 			}
 			return []types.WorkItem{{
 				ID:       fmt.Sprintf("svc-metrics:%s:%s:%s", t.ServiceID, t.EnvironmentID, chunk.Start.Format(time.RFC3339)),
@@ -149,22 +149,11 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 		return
 	}
 
-	// Determine coverage interval from params
-	startDateStr, _ := item.Params["startDate"].(string)
-	startTime, _ := time.Parse(time.RFC3339, startDateStr)
-
-	// End time: use endDate if present (chunked gap), otherwise use now (live edge)
-	endTime := now
-	if endDateStr, ok := item.Params["endDate"].(string); ok {
-		if parsed, parseErr := time.Parse(time.RFC3339, endDateStr); parseErr == nil {
-			endTime = parsed
-		}
-	}
-
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
 	// Update coverage
-	if !startTime.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(compositeKey, coverage.CoverageTypeServiceMetric)
-		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(results) == 0, g.sampleRate); covErr != nil {
 			g.logger.Warn("failed to update service metric coverage",
 				"service", serviceName, "service_id", serviceID,
 				"environment", environmentName, "environment_id", environmentID,
@@ -210,7 +199,7 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 		"service", serviceName, "service_id", serviceID,
 		"environment", environmentName, "environment_id", environmentID,
 		"series", len(results), "points", len(points),
-		"start", startDateStr, "end", endTime.Format(time.RFC3339),
+		"window", window,
 	)
 
 	// Write to sinks

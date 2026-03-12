@@ -118,15 +118,13 @@ func (g *HttpMetricsGenerator) Type() types.TaskType {
 func (g *HttpMetricsGenerator) NextPoll() time.Time { return g.nextPoll }
 
 // durationBatchKey returns the batch key for httpDurationMetrics items.
-func (g *HttpMetricsGenerator) durationBatchKey(start, end time.Time) string {
-	return fmt.Sprintf("httpdur:step=%d,s=%s,e=%s",
-		g.stepSeconds, start.Format(time.RFC3339), end.Format(time.RFC3339))
+func (g *HttpMetricsGenerator) durationBatchKey(chunk coverage.TimeWindow) string {
+	return fmt.Sprintf("httpdur:step=%d,%s", g.stepSeconds, chunk.BatchKey())
 }
 
 // statusBatchKey returns the batch key for httpMetricsGroupedByStatus items.
-func (g *HttpMetricsGenerator) statusBatchKey(start, end time.Time) string {
-	return fmt.Sprintf("httpstatus:step=%d,s=%s,e=%s",
-		g.stepSeconds, start.Format(time.RFC3339), end.Format(time.RFC3339))
+func (g *HttpMetricsGenerator) statusBatchKey(chunk coverage.TimeWindow) string {
+	return fmt.Sprintf("httpstatus:step=%d,%s", g.stepSeconds, chunk.BatchKey())
 }
 
 // durationBatchKeyLive returns the batch key for live-edge duration items (no endDate).
@@ -165,20 +163,21 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+		buildItems: func(entity pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 			t := entity.Data.(types.ServiceTarget)
 
 			// HTTP endpoints always require endDate; for live edge use now
+			startDate := chunk.Start.Format(time.RFC3339)
 			endDate := chunk.End.Format(time.RFC3339)
-			durBatchKey := g.durationBatchKey(chunk.Start, chunk.End)
-			statusBatchKey := g.statusBatchKey(chunk.Start, chunk.End)
+			var durBatchKey, statusBatchKey string
 			if isLiveEdge {
 				endDate = now.Format(time.RFC3339)
 				durBatchKey = g.durationBatchKeyLive()
 				statusBatchKey = g.statusBatchKeyLive()
+			} else {
+				durBatchKey = g.durationBatchKey(chunk)
+				statusBatchKey = g.statusBatchKey(chunk)
 			}
-
-			startDate := chunk.Start.Format(time.RFC3339)
 			return []types.WorkItem{
 				{
 					ID:       fmt.Sprintf("http-duration:%s:%s:%s", t.ServiceID, t.EnvironmentID, startDate),
@@ -269,21 +268,13 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	}
 
 	// Determine coverage interval
-	startDateStr, _ := item.Params["startDate"].(string)
-	startTime, _ := time.Parse(time.RFC3339, startDateStr)
-
-	endTime := now
-	if endDateStr, ok := item.Params["endDate"].(string); ok {
-		if parsed, parseErr := time.Parse(time.RFC3339, endDateStr); parseErr == nil {
-			endTime = parsed
-		}
-	}
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
 
 	// Update coverage (duration is the primary coverage updater for both kinds)
 	compositeKey := serviceID + ":" + environmentID
-	if !startTime.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(compositeKey, coverage.CoverageTypeHTTPMetric)
-		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(resp.Samples) == 0, g.stepSeconds); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(resp.Samples) == 0, g.stepSeconds); covErr != nil {
 			g.logger.Warn("failed to update http metric coverage",
 				"service", serviceName, "service_id", serviceID,
 				"environment", environmentName, "environment_id", environmentID,
@@ -331,7 +322,7 @@ func (g *HttpMetricsGenerator) deliverDuration(
 		"service", serviceName, "service_id", serviceID,
 		"environment", environmentName, "environment_id", environmentID,
 		"samples", len(resp.Samples), "points", len(points),
-		"start", startDateStr, "end", endTime.Format(time.RFC3339),
+		"window", window,
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
@@ -352,13 +343,7 @@ func (g *HttpMetricsGenerator) deliverStatus(
 		return
 	}
 
-	startDateStr, _ := item.Params["startDate"].(string)
-	endTime := now
-	if endDateStr, ok := item.Params["endDate"].(string); ok {
-		if parsed, parseErr := time.Parse(time.RFC3339, endDateStr); parseErr == nil {
-			endTime = parsed
-		}
-	}
+	window, _ := coverage.WindowFromParams(item.Params, now)
 
 	// Build base labels using already-resolved names from Deliver
 	baseLabels := map[string]string{
@@ -392,7 +377,7 @@ func (g *HttpMetricsGenerator) deliverStatus(
 		"service", serviceName, "service_id", serviceID,
 		"environment", environmentName, "environment_id", environmentID,
 		"status_groups", len(groups), "points", len(points),
-		"start", startDateStr, "end", endTime.Format(time.RFC3339),
+		"window", window,
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)

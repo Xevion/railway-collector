@@ -44,8 +44,8 @@ func (f *fakeStateStore) Close() error                                   { retur
 
 // simpleBuildItems returns a buildItems callback that creates one types.WorkItem per
 // chunk with a predictable ID format for assertions.
-func simpleBuildItems(kind types.QueryKind) func(pollEntity, coverage.TimeRange, bool) []types.WorkItem {
-	return func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+func simpleBuildItems(kind types.QueryKind) func(pollEntity, coverage.TimeWindow, bool) []types.WorkItem {
+	return func(e pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 		id := fmt.Sprintf("test:%s:%s", e.Key, chunk.Start.Format(time.RFC3339))
 		if isLiveEdge {
 			id += ":live"
@@ -178,7 +178,7 @@ func TestPollCoverageGaps_BudgetAccountsForItemsPerEmit(t *testing.T) {
 	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 
 	// buildItems returns 2 items per call (like HTTP generator)
-	pairBuilder := func(e pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+	pairBuilder := func(e pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 		base := fmt.Sprintf("test:%s:%s", e.Key, chunk.Start.Format(time.RFC3339))
 		return []types.WorkItem{
 			{ID: base + ":a", Kind: types.QueryMetrics, AliasKey: e.Key},

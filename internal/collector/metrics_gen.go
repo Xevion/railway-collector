@@ -124,17 +124,17 @@ func alignToChunkBoundary(t time.Time, chunkSize time.Duration) time.Time {
 }
 
 // alignedChunks splits a gap into chunks aligned to fixed boundaries.
-func alignedChunks(gap coverage.TimeRange, chunkSize time.Duration) []coverage.TimeRange {
+func alignedChunks(gap coverage.TimeWindow, chunkSize time.Duration) []coverage.TimeWindow {
 	alignedStart := alignToChunkBoundary(gap.Start, chunkSize)
 
-	var chunks []coverage.TimeRange
+	var chunks []coverage.TimeWindow
 	cursor := alignedStart
 	for cursor.Before(gap.End) {
 		end := cursor.Add(chunkSize)
 		if end.After(gap.End) {
 			end = gap.End
 		}
-		chunks = append(chunks, coverage.TimeRange{Start: cursor, End: end})
+		chunks = append(chunks, coverage.TimeWindow{Start: cursor, End: end})
 		cursor = cursor.Add(chunkSize)
 	}
 	return chunks
@@ -172,7 +172,7 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 			return entities
 		},
-		buildItems: func(entity pollEntity, chunk coverage.TimeRange, isLiveEdge bool) []types.WorkItem {
+		buildItems: func(entity pollEntity, chunk coverage.TimeWindow, isLiveEdge bool) []types.WorkItem {
 			pid := entity.Key
 			params := map[string]any{
 				"startDate":              chunk.Start.Format(time.RFC3339),
@@ -184,7 +184,7 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 			batchKey := metricsBatchKey(g.measurements, g.sampleRate, g.avgWindow)
 			if !isLiveEdge {
 				params["endDate"] = chunk.End.Format(time.RFC3339)
-				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk.Start, chunk.End)
+				batchKey = metricsBatchKeyChunk(g.measurements, g.sampleRate, g.avgWindow, chunk)
 			}
 			return []types.WorkItem{{
 				ID:       fmt.Sprintf("metrics:%s:%s", pid, chunk.Start.Format(time.RFC3339)),
@@ -233,22 +233,11 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 		return
 	}
 
-	// Determine coverage interval from params
-	startDateStr, _ := item.Params["startDate"].(string)
-	startTime, _ := time.Parse(time.RFC3339, startDateStr)
-
-	// End time: use endDate if present (chunked gap), otherwise use now (live edge)
-	endTime := now
-	if endDateStr, ok := item.Params["endDate"].(string); ok {
-		if parsed, parseErr := time.Parse(time.RFC3339, endDateStr); parseErr == nil {
-			endTime = parsed
-		}
-	}
-
+	window, hasWindow := coverage.WindowFromParams(item.Params, now)
 	// Update coverage
-	if !startTime.IsZero() {
+	if hasWindow {
 		covKey := coverage.CoverageKey(projectID, coverage.CoverageTypeMetric)
-		if covErr := updateCoverage(g.store, covKey, startTime, endTime, len(results) == 0, g.sampleRate); covErr != nil {
+		if covErr := updateCoverage(g.store, covKey, window.Start, window.ResolvedEnd(now), len(results) == 0, g.sampleRate); covErr != nil {
 			g.logger.Warn("failed to update metric coverage",
 				"project", projectName, "project_id", projectID, "error", covErr)
 		}
@@ -280,7 +269,7 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 	g.logger.Log(ctx, level, "metrics delivered",
 		"project", projectName, "project_id", projectID,
 		"series", len(results), "points", len(points),
-		"start", startDateStr, "end", endTime.Format(time.RFC3339),
+		"window", window,
 	)
 
 	// Write to sinks
