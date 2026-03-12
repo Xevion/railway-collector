@@ -151,15 +151,16 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	}
 
 	items := pollCoverageGaps(now, gapPollParams{
-		store:           g.store,
-		discovery:       g.discovery,
-		logger:          g.logger,
-		metricRetention: g.metricRetention,
-		chunkSize:       g.chunkSize,
-		maxItemsPerPoll: g.maxItemsPerPoll,
-		nextPoll:        g.nextPoll,
-		itemsPerEmit:    1,
-		logPrefix:       "metric",
+		store:            g.store,
+		discovery:        g.discovery,
+		logger:           g.logger,
+		metricRetention:  g.metricRetention,
+		chunkSize:        g.chunkSize,
+		maxItemsPerPoll:  g.maxItemsPerPoll,
+		nextPoll:         g.nextPoll,
+		collectorMetrics: g.collectorMetrics,
+		itemsPerEmit:     1,
+		logPrefix:        "metric",
 		entities: func(targets []types.ServiceTarget) []pollEntity {
 			pids := uniqueProjectIDs(targets)
 			entities := make([]pollEntity, len(pids))
@@ -199,6 +200,8 @@ func (g *ProjectMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
+		g.collectorMetrics.IncrCounter("collector_items_generated_total",
+			map[string]string{"generator": "metrics"})
 	}
 
 	return items
@@ -223,6 +226,8 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 	if err != nil {
 		g.logger.Error("metrics delivery failed",
 			"project", projectName, "project_id", projectID, "error", err)
+		g.collectorMetrics.IncrCounter("collector_errors_total",
+			map[string]string{"component": "generator", "kind": "delivery"})
 		return
 	}
 
@@ -274,6 +279,8 @@ func (g *ProjectMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 
 	// Write to sinks
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "metric", "query_kind": string(item.Kind)})
 }
 
 // buildLabelsFromRaw builds metric labels from raw JSON tags,

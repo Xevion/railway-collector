@@ -57,33 +57,35 @@ type rawHttpLogEntry struct {
 
 // LogsGeneratorConfig configures a LogsGenerator.
 type LogsGeneratorConfig struct {
-	Discovery       types.TargetProvider
-	Store           types.StateStore
-	Sinks           []sink.Sink
-	Clock           clockwork.Clock
-	Types           []string      // enabled log types: "deployment", "build", "http"
-	Limit           int           // max logs per request
-	Interval        time.Duration // minimum time between polls
-	LogRetention    time.Duration // how far back to scan for env log gaps (e.g. 5 days)
-	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
-	MaxItemsPerPoll int           // max work items to emit per poll
-	Logger          *slog.Logger
+	Discovery        types.TargetProvider
+	Store            types.StateStore
+	Sinks            []sink.Sink
+	Clock            clockwork.Clock
+	Types            []string      // enabled log types: "deployment", "build", "http"
+	Limit            int           // max logs per request
+	Interval         time.Duration // minimum time between polls
+	LogRetention     time.Duration // how far back to scan for env log gaps (e.g. 5 days)
+	ChunkSize        time.Duration // chunk size for older gaps (e.g. 6 hours)
+	MaxItemsPerPoll  int           // max work items to emit per poll
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 // LogsGenerator implements TaskGenerator for log collection.
 // All log types (environment, build, HTTP) use coverage-driven gap filling.
 type LogsGenerator struct {
-	discovery       types.TargetProvider
-	store           types.StateStore
-	sinks           []sink.Sink
-	clock           clockwork.Clock
-	types           map[string]bool
-	limit           int
-	interval        time.Duration
-	logRetention    time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	logger          *slog.Logger
+	discovery        types.TargetProvider
+	store            types.StateStore
+	sinks            []sink.Sink
+	clock            clockwork.Clock
+	types            map[string]bool
+	limit            int
+	interval         time.Duration
+	logRetention     time.Duration
+	chunkSize        time.Duration
+	maxItemsPerPoll  int
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	nextPoll time.Time
 }
@@ -105,17 +107,18 @@ func NewLogsGenerator(cfg LogsGeneratorConfig) *LogsGenerator {
 	}
 
 	return &LogsGenerator{
-		discovery:       cfg.Discovery,
-		store:           cfg.Store,
-		sinks:           cfg.Sinks,
-		clock:           cfg.Clock,
-		types:           typeSet,
-		limit:           cfg.Limit,
-		interval:        cfg.Interval,
-		logRetention:    cfg.LogRetention,
-		chunkSize:       cfg.ChunkSize,
-		maxItemsPerPoll: cfg.MaxItemsPerPoll,
-		logger:          cfg.Logger,
+		discovery:        cfg.Discovery,
+		store:            cfg.Store,
+		sinks:            cfg.Sinks,
+		clock:            cfg.Clock,
+		types:            typeSet,
+		limit:            cfg.Limit,
+		interval:         cfg.Interval,
+		logRetention:     cfg.LogRetention,
+		chunkSize:        cfg.ChunkSize,
+		maxItemsPerPoll:  cfg.MaxItemsPerPoll,
+		logger:           cfg.Logger,
+		collectorMetrics: cfg.CollectorMetrics,
 	}
 }
 
@@ -146,6 +149,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 	if g.types["deployment"] {
 		retentionStart := now.Add(-g.logRetention)
 		seen := make(map[string]bool)
+		envLogGapCount := 0
 		for _, t := range targets {
 			if seen[t.EnvironmentID] || itemCount >= g.maxItemsPerPoll {
 				continue
@@ -161,6 +165,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 
 			gaps := coverage.FindGaps(existing, retentionStart, now)
+			envLogGapCount += len(gaps)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -257,11 +262,15 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 				}
 			}
 		}
+		g.collectorMetrics.SetGauge("collector_coverage_gap_count",
+			map[string]string{"coverage_type": coverage.CoverageTypeLogEnv},
+			float64(envLogGapCount))
 	}
 
 	// Build logs: coverage-driven gap filling (per deployment)
 	if g.types["build"] {
 		retentionStart := now.Add(-g.logRetention)
+		buildLogGapCount := 0
 		for _, t := range targets {
 			if t.DeploymentID == "" || itemCount >= g.maxItemsPerPoll {
 				continue
@@ -276,6 +285,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 
 			gaps := coverage.FindGaps(existing, retentionStart, now)
+			buildLogGapCount += len(gaps)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -310,11 +320,15 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 				itemCount++
 			}
 		}
+		g.collectorMetrics.SetGauge("collector_coverage_gap_count",
+			map[string]string{"coverage_type": coverage.CoverageTypeLogBuild},
+			float64(buildLogGapCount))
 	}
 
 	// HTTP logs: coverage-driven gap filling (per deployment)
 	if g.types["http"] {
 		retentionStart := now.Add(-g.logRetention)
+		httpLogGapCount := 0
 		for _, t := range targets {
 			if t.DeploymentID == "" || itemCount >= g.maxItemsPerPoll {
 				continue
@@ -329,6 +343,7 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 			}
 
 			gaps := coverage.FindGaps(existing, retentionStart, now)
+			httpLogGapCount += len(gaps)
 			if len(gaps) == 0 {
 				continue
 			}
@@ -363,10 +378,15 @@ func (g *LogsGenerator) Poll(now time.Time) []types.WorkItem {
 				itemCount++
 			}
 		}
+		g.collectorMetrics.SetGauge("collector_coverage_gap_count",
+			map[string]string{"coverage_type": coverage.CoverageTypeLogHTTP},
+			float64(httpLogGapCount))
 	}
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
+		g.collectorMetrics.IncrCounter("collector_items_generated_total",
+			map[string]string{"generator": "logs"})
 	}
 
 	return items
@@ -378,6 +398,8 @@ func (g *LogsGenerator) Deliver(ctx context.Context, item types.WorkItem, data j
 	if err != nil {
 		g.logger.Error("log delivery failed",
 			"kind", item.Kind, "alias_key", item.AliasKey, "error", err)
+		g.collectorMetrics.IncrCounter("collector_errors_total",
+			map[string]string{"component": "generator", "kind": "delivery"})
 		return
 	}
 
@@ -502,6 +524,8 @@ func (g *LogsGenerator) deliverEnvironmentLogs(ctx context.Context, item types.W
 		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "log", "query_kind": string(item.Kind)})
 }
 
 func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item types.WorkItem, data json.RawMessage) {
@@ -575,6 +599,8 @@ func (g *LogsGenerator) deliverBuildLogs(ctx context.Context, item types.WorkIte
 		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "log", "query_kind": string(item.Kind)})
 }
 
 func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item types.WorkItem, data json.RawMessage) {
@@ -662,4 +688,6 @@ func (g *LogsGenerator) deliverHttpLogs(ctx context.Context, item types.WorkItem
 		"window", window)
 
 	writeLogsToSinks(ctx, g.sinks, entries, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "log", "query_kind": string(item.Kind)})
 }

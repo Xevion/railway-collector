@@ -19,34 +19,36 @@ import (
 // BaseMetricsConfig holds configuration fields shared across all metrics
 // generator configs (project, service, replica).
 type BaseMetricsConfig struct {
-	Discovery       types.TargetProvider
-	Store           types.StateStore
-	Sinks           []sink.Sink
-	Clock           clockwork.Clock
-	Measurements    []railway.MetricMeasurement
-	SampleRate      int
-	AvgWindow       int
-	Interval        time.Duration // minimum time between polls (e.g. 30s)
-	MetricRetention time.Duration // how far back to scan for gaps (e.g. 90 days)
-	ChunkSize       time.Duration // chunk size for older gaps (e.g. 6 hours)
-	MaxItemsPerPoll int           // max work items to emit per poll
-	Logger          *slog.Logger
+	Discovery        types.TargetProvider
+	Store            types.StateStore
+	Sinks            []sink.Sink
+	Clock            clockwork.Clock
+	Measurements     []railway.MetricMeasurement
+	SampleRate       int
+	AvgWindow        int
+	Interval         time.Duration // minimum time between polls (e.g. 30s)
+	MetricRetention  time.Duration // how far back to scan for gaps (e.g. 90 days)
+	ChunkSize        time.Duration // chunk size for older gaps (e.g. 6 hours)
+	MaxItemsPerPoll  int           // max work items to emit per poll
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 // baseMetrics holds runtime fields shared across all metrics generator structs.
 type baseMetrics struct {
-	discovery       types.TargetProvider
-	store           types.StateStore
-	sinks           []sink.Sink
-	clock           clockwork.Clock
-	measurements    []railway.MetricMeasurement
-	sampleRate      int
-	avgWindow       int
-	interval        time.Duration
-	metricRetention time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	logger          *slog.Logger
+	discovery        types.TargetProvider
+	store            types.StateStore
+	sinks            []sink.Sink
+	clock            clockwork.Clock
+	measurements     []railway.MetricMeasurement
+	sampleRate       int
+	avgWindow        int
+	interval         time.Duration
+	metricRetention  time.Duration
+	chunkSize        time.Duration
+	maxItemsPerPoll  int
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	nextPoll time.Time // earliest time to emit items again
 }
@@ -75,18 +77,19 @@ func applyConfigDefaults(cfg *BaseMetricsConfig, defaultMeasurements []railway.M
 // measurements slice. Call applyConfigDefaults first to fill in defaults.
 func newBaseMetrics(cfg BaseMetricsConfig, measurements []railway.MetricMeasurement) baseMetrics {
 	return baseMetrics{
-		discovery:       cfg.Discovery,
-		store:           cfg.Store,
-		sinks:           cfg.Sinks,
-		clock:           cfg.Clock,
-		measurements:    measurements,
-		sampleRate:      cfg.SampleRate,
-		avgWindow:       cfg.AvgWindow,
-		interval:        cfg.Interval,
-		metricRetention: cfg.MetricRetention,
-		chunkSize:       cfg.ChunkSize,
-		maxItemsPerPoll: cfg.MaxItemsPerPoll,
-		logger:          cfg.Logger,
+		discovery:        cfg.Discovery,
+		store:            cfg.Store,
+		sinks:            cfg.Sinks,
+		clock:            cfg.Clock,
+		measurements:     measurements,
+		sampleRate:       cfg.SampleRate,
+		avgWindow:        cfg.AvgWindow,
+		interval:         cfg.Interval,
+		metricRetention:  cfg.MetricRetention,
+		chunkSize:        cfg.ChunkSize,
+		maxItemsPerPoll:  cfg.MaxItemsPerPoll,
+		logger:           cfg.Logger,
+		collectorMetrics: cfg.CollectorMetrics,
 	}
 }
 
@@ -211,13 +214,14 @@ type pollEntity struct {
 // generators. The varying behavior is captured by the entities and buildItems
 // callbacks.
 type gapPollParams struct {
-	store           types.StateStore
-	discovery       types.TargetProvider
-	logger          *slog.Logger
-	metricRetention time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	nextPoll        time.Time // guard: skip if now < nextPoll
+	store            types.StateStore
+	discovery        types.TargetProvider
+	logger           *slog.Logger
+	metricRetention  time.Duration
+	chunkSize        time.Duration
+	maxItemsPerPoll  int
+	nextPoll         time.Time // guard: skip if now < nextPoll
+	collectorMetrics *CollectorMetrics
 
 	// entities extracts the iteration list from discovered targets.
 	entities func(targets []types.ServiceTarget) []pollEntity
@@ -257,6 +261,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 
 	var items []types.WorkItem
 	itemCount := 0
+	gapCounts := make(map[string]int)
 
 	for _, entity := range entities {
 		if itemCount+p.itemsPerEmit > p.maxItemsPerPoll {
@@ -272,6 +277,7 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 		}
 
 		gaps := coverage.FindGaps(existing, retentionStart, now)
+		gapCounts[entity.CoverageType] += len(gaps)
 		if len(gaps) == 0 {
 			continue
 		}
@@ -336,6 +342,12 @@ func pollCoverageGaps(now time.Time, p gapPollParams) []types.WorkItem {
 				}
 			}
 		}
+	}
+
+	for coverageType, count := range gapCounts {
+		p.collectorMetrics.SetGauge("collector_coverage_gap_count",
+			map[string]string{"coverage_type": coverageType},
+			float64(count))
 	}
 
 	return items

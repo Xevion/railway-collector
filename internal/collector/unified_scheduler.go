@@ -15,6 +15,7 @@ import (
 	"github.com/xevion/railway-collector/internal/collector/credit"
 	"github.com/xevion/railway-collector/internal/collector/loader"
 	"github.com/xevion/railway-collector/internal/collector/types"
+	"github.com/xevion/railway-collector/internal/sink"
 )
 
 // UnifiedSchedulerConfig configures the unified credit-based scheduler.
@@ -23,6 +24,7 @@ type UnifiedSchedulerConfig struct {
 	API        types.RailwayAPI
 	Credits    *credit.CreditAllocator
 	Generators []types.TaskGenerator
+	Sinks      []sink.Sink
 	Logger     *slog.Logger
 
 	// TickInterval controls how often the scheduler polls generators for work.
@@ -37,6 +39,14 @@ type UnifiedSchedulerConfig struct {
 	// DrainTimeout is how long to wait for in-flight work during shutdown.
 	// Defaults to 5s if zero.
 	DrainTimeout time.Duration
+
+	// CollectorMetrics tracks operational self-metrics. If nil, self-monitoring
+	// is disabled and the emission interval is not used.
+	CollectorMetrics *CollectorMetrics
+
+	// SelfMetricsInterval controls how often collector_* self-metrics are
+	// emitted to sinks. Defaults to 30s if zero (and CollectorMetrics is set).
+	SelfMetricsInterval time.Duration
 }
 
 // UnifiedScheduler replaces the old ticker-based Scheduler with a single
@@ -52,7 +62,8 @@ type UnifiedScheduler struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 
-	lastIdleLog time.Time // last time we logged an idle message
+	lastIdleLog        time.Time // last time we logged an idle message
+	lastSelfMetricsEmit time.Time // last time self-metrics were emitted
 }
 
 // NewUnifiedScheduler creates a new scheduler. The rate limiter is initialized
@@ -67,6 +78,17 @@ func NewUnifiedScheduler(cfg UnifiedSchedulerConfig) *UnifiedScheduler {
 	if cfg.DrainTimeout == 0 {
 		cfg.DrainTimeout = 5 * time.Second
 	}
+	if cfg.CollectorMetrics != nil && cfg.SelfMetricsInterval == 0 {
+		cfg.SelfMetricsInterval = 30 * time.Second
+	}
+
+	// Pre-initialize known counters so they appear at 0 before the first event.
+	cfg.CollectorMetrics.InitCounter("collector_api_requests_total", map[string]string{"operation": "Batch", "status": "ok"})
+	cfg.CollectorMetrics.InitCounter("collector_api_requests_total", map[string]string{"operation": "Batch", "status": "error"})
+	cfg.CollectorMetrics.InitCounter("collector_errors_total", map[string]string{"component": "generator", "kind": "delivery"})
+	cfg.CollectorMetrics.InitCounter("collector_ticks_total", map[string]string{"result": "idle"})
+	cfg.CollectorMetrics.InitCounter("collector_ticks_total", map[string]string{"result": "queried"})
+	cfg.CollectorMetrics.InitCounter("collector_ticks_total", map[string]string{"result": "discovery_only"})
 
 	genByType := make(map[types.TaskType]types.TaskGenerator, len(cfg.Generators))
 	for _, g := range cfg.Generators {
@@ -115,6 +137,23 @@ func (s *UnifiedScheduler) Stop() {
 func (s *UnifiedScheduler) tick(ctx context.Context) {
 	now := s.cfg.Clock.Now()
 
+	tickResult := "idle"
+	defer func() {
+		s.cfg.CollectorMetrics.IncrCounter("collector_ticks_total",
+			map[string]string{"result": tickResult})
+		utilization := 0.0
+		if tickResult == "queried" || tickResult == "discovery_only" {
+			utilization = 1.0
+		}
+		s.cfg.CollectorMetrics.SetGauge("collector_tick_utilization", nil, utilization)
+		// Emit self-metrics on interval.
+		if s.cfg.CollectorMetrics != nil && now.Sub(s.lastSelfMetricsEmit) >= s.cfg.SelfMetricsInterval {
+			points := s.cfg.CollectorMetrics.Snapshot(now)
+			writeMetricsToSinks(ctx, s.cfg.Sinks, points, s.cfg.Logger)
+			s.lastSelfMetricsEmit = now
+		}
+	}()
+
 	// 1. Poll all generators for pending work.
 	var allItems []types.WorkItem
 	// Track which generator produced each item for result delivery.
@@ -133,6 +172,8 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 			generatorMap[item.ID] = gen
 		}
 	}
+
+	s.cfg.CollectorMetrics.SetGauge("collector_pending_items", nil, float64(len(allItems)))
 
 	if len(allItems) == 0 {
 		s.logIdleStatus(now)
@@ -163,6 +204,7 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 			s.cfg.Logger.Warn("rate limiter wait failed", "error", err)
 			return
 		}
+		tickResult = "discovery_only"
 		s.handleDiscoveryItems(ctx, discoveryItems, generatorMap)
 		return
 	}
@@ -241,8 +283,27 @@ func (s *UnifiedScheduler) tick(ctx context.Context) {
 		)
 
 		query, vars := req.AssembleQuery()
+		reqStart := s.cfg.Clock.Now()
 		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
-		s.updateRateState()
+		reqDuration := s.cfg.Clock.Now().Sub(reqStart).Seconds()
+		s.updateRateState(now)
+
+		status := "ok"
+		if queryErr != nil {
+			status = "error"
+		}
+		s.cfg.CollectorMetrics.IncrCounter("collector_api_requests_total",
+			map[string]string{"operation": "Batch", "status": status})
+		s.cfg.CollectorMetrics.SetGauge("collector_last_request_duration_seconds",
+			map[string]string{"operation": "Batch"}, reqDuration)
+		s.cfg.CollectorMetrics.SetGauge("collector_last_request_aliases",
+			map[string]string{"operation": "Batch"}, float64(len(req.Fragments)))
+		s.cfg.CollectorMetrics.AddCounter("collector_request_duration_seconds_total",
+			map[string]string{"operation": "Batch"}, reqDuration)
+		s.cfg.CollectorMetrics.AddCounter("collector_aliases_total",
+			map[string]string{"operation": "Batch"}, float64(len(req.Fragments)))
+
+		tickResult = "queried"
 
 		// On computation limit errors with multi-alias requests, retry individually.
 		// The error may come as a transport error (queryErr) or as a GraphQL-level
@@ -335,8 +396,25 @@ func (s *UnifiedScheduler) retryFragmentsIndividually(ctx context.Context, fragm
 		)
 
 		query, vars := soloReq.AssembleQuery()
+		retryStart := s.cfg.Clock.Now()
 		resp, queryErr := s.cfg.API.RawQuery(ctx, "Batch", query, vars)
-		s.updateRateState()
+		retryDuration := s.cfg.Clock.Now().Sub(retryStart).Seconds()
+		s.updateRateState(s.cfg.Clock.Now())
+
+		retryStatus := "ok"
+		if queryErr != nil {
+			retryStatus = "error"
+		}
+		s.cfg.CollectorMetrics.IncrCounter("collector_api_requests_total",
+			map[string]string{"operation": "Batch", "status": retryStatus})
+		s.cfg.CollectorMetrics.SetGauge("collector_last_request_duration_seconds",
+			map[string]string{"operation": "Batch"}, retryDuration)
+		s.cfg.CollectorMetrics.SetGauge("collector_last_request_aliases",
+			map[string]string{"operation": "Batch"}, 1)
+		s.cfg.CollectorMetrics.AddCounter("collector_request_duration_seconds_total",
+			map[string]string{"operation": "Batch"}, retryDuration)
+		s.cfg.CollectorMetrics.AddCounter("collector_aliases_total",
+			map[string]string{"operation": "Batch"}, 1)
 
 		if queryErr != nil {
 			s.cfg.Logger.Warn("individual alias retry failed",
@@ -402,10 +480,10 @@ func (s *UnifiedScheduler) logIdleStatus(now time.Time) {
 }
 
 // updateRateState checks the API's rate limit info and adjusts the credit
-// allocator regime and rate limiter accordingly.
-func (s *UnifiedScheduler) updateRateState() {
+// allocator regime and rate limiter accordingly. now should be the current
+// clock time (passed in to avoid extra clock reads).
+func (s *UnifiedScheduler) updateRateState(now time.Time) {
 	remaining, resetAt := s.cfg.API.RateLimitInfo()
-	now := s.cfg.Clock.Now()
 	secondsLeft := resetAt.Sub(now).Seconds()
 
 	// Assume a 1000 RPH limit for hobby tier by default.
@@ -414,6 +492,21 @@ func (s *UnifiedScheduler) updateRateState() {
 	estimatedLimit := 1000
 
 	s.cfg.Credits.UpdateRegime(remaining, estimatedLimit, secondsLeft)
+
+	// Update self-metrics gauges for rate and credit state.
+	s.cfg.CollectorMetrics.SetGauge("collector_rate_limit_remaining", nil, float64(remaining))
+	// Map regime to: 0=Exhausted, 1=Scarce, 2=Normal, 3=Abundant.
+	s.cfg.CollectorMetrics.SetGauge("collector_credit_regime", nil, float64(3-int(s.cfg.Credits.Regime())))
+	for _, tt := range []types.TaskType{
+		types.TaskTypeMetrics,
+		types.TaskTypeLogs,
+		types.TaskTypeDiscovery,
+		types.TaskTypeUsage,
+	} {
+		s.cfg.CollectorMetrics.SetGauge("collector_credit_balance",
+			map[string]string{"task_type": tt.String()},
+			s.cfg.Credits.Available(tt, now))
+	}
 
 	// Adjust rate limiter: target 90% of available rate, capped at MaxRPS.
 	if secondsLeft > 0 && remaining > 0 {

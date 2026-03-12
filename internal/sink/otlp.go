@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -86,16 +87,21 @@ func (s *OTLPSink) WriteMetrics(ctx context.Context, metrics []MetricPoint) erro
 		return nil
 	}
 
-	// Group metrics by name to create proper OTLP metric structures
-	byName := make(map[string][]MetricPoint)
+	// Group metrics by (name, kind) to create proper OTLP metric structures.
+	type nameKind struct {
+		name string
+		kind MetricKind
+	}
+	byNameKind := make(map[nameKind][]MetricPoint)
 	for _, m := range metrics {
-		byName[m.Name] = append(byName[m.Name], m)
+		k := nameKind{m.Name, m.Kind}
+		byNameKind[k] = append(byNameKind[k], m)
 	}
 
 	var scopeMetrics []metricdata.ScopeMetrics
 	var otelMetrics []metricdata.Metrics
 
-	for name, points := range byName {
+	for nk, points := range byNameKind {
 		var dataPoints []metricdata.DataPoint[float64]
 		for _, p := range points {
 			attrs := make([]attribute.KeyValue, 0, len(p.Labels))
@@ -109,13 +115,28 @@ func (s *OTLPSink) WriteMetrics(ctx context.Context, metrics []MetricPoint) erro
 			})
 		}
 
+		var data metricdata.Aggregation
+		if nk.kind == MetricKindCounter {
+			data = metricdata.Sum[float64]{
+				DataPoints:  dataPoints,
+				Temporality: metricdata.CumulativeTemporality,
+				IsMonotonic: true,
+			}
+		} else {
+			data = metricdata.Gauge[float64]{DataPoints: dataPoints}
+		}
+
 		otelMetrics = append(otelMetrics, metricdata.Metrics{
-			Name: name,
-			Data: metricdata.Gauge[float64]{DataPoints: dataPoints},
+			Name: nk.name,
+			Data: data,
 		})
 	}
 
 	scopeMetrics = append(scopeMetrics, metricdata.ScopeMetrics{
+		Scope: instrumentation.Scope{
+			Name:    "railway-collector",
+			Version: "0.1.0",
+		},
 		Metrics: otelMetrics,
 	})
 

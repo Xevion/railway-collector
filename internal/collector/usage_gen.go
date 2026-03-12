@@ -38,24 +38,26 @@ type rawEstimatedUsageResult struct {
 
 // UsageGeneratorConfig configures a UsageGenerator.
 type UsageGeneratorConfig struct {
-	Discovery    types.TargetProvider
-	Sinks        []sink.Sink
-	Clock        clockwork.Clock
-	Measurements []railway.MetricMeasurement
-	Interval     time.Duration // default: 1 hour
-	Logger       *slog.Logger
+	Discovery        types.TargetProvider
+	Sinks            []sink.Sink
+	Clock            clockwork.Clock
+	Measurements     []railway.MetricMeasurement
+	Interval         time.Duration // default: 1 hour
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 // UsageGenerator implements TaskGenerator for billing/cost data collection.
 // It collects current-state snapshots at a low cadence (default: hourly),
 // emitting usage and estimated-usage WorkItems per project.
 type UsageGenerator struct {
-	discovery    types.TargetProvider
-	sinks        []sink.Sink
-	clock        clockwork.Clock
-	measurements []railway.MetricMeasurement
-	interval     time.Duration
-	logger       *slog.Logger
+	discovery        types.TargetProvider
+	sinks            []sink.Sink
+	clock            clockwork.Clock
+	measurements     []railway.MetricMeasurement
+	interval         time.Duration
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	nextPoll time.Time
 }
@@ -79,12 +81,13 @@ func NewUsageGenerator(cfg UsageGeneratorConfig) *UsageGenerator {
 	}
 
 	return &UsageGenerator{
-		discovery:    cfg.Discovery,
-		sinks:        cfg.Sinks,
-		clock:        cfg.Clock,
-		measurements: measurements,
-		interval:     interval,
-		logger:       cfg.Logger,
+		discovery:        cfg.Discovery,
+		sinks:            cfg.Sinks,
+		clock:            cfg.Clock,
+		measurements:     measurements,
+		interval:         interval,
+		logger:           cfg.Logger,
+		collectorMetrics: cfg.CollectorMetrics,
 	}
 }
 
@@ -162,6 +165,8 @@ func (g *UsageGenerator) Poll(now time.Time) []types.WorkItem {
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
+		g.collectorMetrics.IncrCounter("collector_items_generated_total",
+			map[string]string{"generator": "usage"})
 	}
 
 	return items
@@ -186,6 +191,8 @@ func (g *UsageGenerator) Deliver(ctx context.Context, item types.WorkItem, data 
 			"kind", string(item.Kind),
 			"project", projectName, "project_id", projectID,
 			"error", err)
+		g.collectorMetrics.IncrCounter("collector_errors_total",
+			map[string]string{"component": "generator", "kind": "delivery"})
 		return
 	}
 
@@ -274,6 +281,8 @@ func (g *UsageGenerator) deliverUsage(
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "usage", "query_kind": string(types.QueryUsage)})
 }
 
 // deliverEstimatedUsage handles types.QueryEstimatedUsage responses.
@@ -328,4 +337,6 @@ func (g *UsageGenerator) deliverEstimatedUsage(
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "usage", "query_kind": string(types.QueryEstimatedUsage)})
 }

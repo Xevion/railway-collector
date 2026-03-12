@@ -5,12 +5,23 @@ import (
 	"time"
 )
 
+// MetricKind distinguishes gauge metrics from cumulative counters.
+type MetricKind int
+
+const (
+	// MetricKindGauge emits as metricdata.Gauge (default, zero value).
+	MetricKindGauge MetricKind = iota
+	// MetricKindCounter emits as metricdata.Sum with CumulativeTemporality.
+	MetricKindCounter
+)
+
 // MetricPoint represents a single metric data point to be sent to a sink.
 type MetricPoint struct {
 	Name      string
 	Value     float64
 	Timestamp time.Time
 	Labels    map[string]string
+	Kind      MetricKind // zero value = Gauge (backward-compatible)
 }
 
 // LogEntry represents a log line to be sent to a sink.

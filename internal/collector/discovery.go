@@ -60,11 +60,12 @@ type PersistedWorkspaceDiscovery struct {
 
 // Discovery handles enumerating Railway resources and building collection targets.
 type Discovery struct {
-	client  types.RailwayAPI
-	store   types.StateStore
-	clock   clockwork.Clock
-	filters config.FiltersConfig
-	logger  *slog.Logger
+	client           types.RailwayAPI
+	store            types.StateStore
+	clock            clockwork.Clock
+	filters          config.FiltersConfig
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	compiledProjects     []compiledFilter
 	compiledServices     []compiledFilter
@@ -101,14 +102,15 @@ func compileFilters(patterns []string, logger *slog.Logger) []compiledFilter {
 }
 
 type DiscoveryConfig struct {
-	Client       types.RailwayAPI
-	Store        types.StateStore // persistent store for caching discovery data across restarts
-	Clock        clockwork.Clock
-	Filters      config.FiltersConfig
-	Workspaces   []Workspace   // static workspace list (from config or Me response)
-	WorkspaceTTL time.Duration // base TTL for workspace discovery (default 1h)
-	Jitter       time.Duration // ± jitter for TTLs (default 15m)
-	Logger       *slog.Logger
+	Client           types.RailwayAPI
+	Store            types.StateStore // persistent store for caching discovery data across restarts
+	Clock            clockwork.Clock
+	Filters          config.FiltersConfig
+	Workspaces       []Workspace   // static workspace list (from config or Me response)
+	WorkspaceTTL     time.Duration // base TTL for workspace discovery (default 1h)
+	Jitter           time.Duration // ± jitter for TTLs (default 15m)
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 func NewDiscovery(cfg DiscoveryConfig) *Discovery {
@@ -132,6 +134,7 @@ func NewDiscovery(cfg DiscoveryConfig) *Discovery {
 		clock:                clk,
 		filters:              cfg.Filters,
 		logger:               cfg.Logger,
+		collectorMetrics:     cfg.CollectorMetrics,
 		compiledProjects:     compileFilters(cfg.Filters.Projects, cfg.Logger),
 		compiledServices:     compileFilters(cfg.Filters.Services, cfg.Logger),
 		compiledEnvironments: compileFilters(cfg.Filters.Environments, cfg.Logger),
@@ -180,6 +183,8 @@ func (d *Discovery) Refresh(ctx context.Context) error {
 	d.mu.Lock()
 	d.targets = allTargets
 	d.mu.Unlock()
+
+	d.collectorMetrics.SetGauge("collector_discovery_targets", nil, float64(len(allTargets)))
 
 	projSet := make(map[string]bool)
 	envSet := make(map[string]bool)
@@ -408,9 +413,10 @@ func (d *Discovery) matchFilter(name, id string, filters []compiledFilter) bool 
 
 // DiscoveryGeneratorConfig configures a DiscoveryGenerator.
 type DiscoveryGeneratorConfig struct {
-	Discovery types.TargetProvider
-	Interval  time.Duration // how often to refresh discovery
-	Logger    *slog.Logger
+	Discovery        types.TargetProvider
+	Interval         time.Duration // how often to refresh discovery
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 // DiscoveryGenerator implements TaskGenerator as a thin wrapper around Discovery.
@@ -422,9 +428,10 @@ type DiscoveryGeneratorConfig struct {
 //
 // Deliver() is a no-op because Refresh() updates Discovery's internal state directly.
 type DiscoveryGenerator struct {
-	discovery types.TargetProvider
-	interval  time.Duration
-	logger    *slog.Logger
+	discovery        types.TargetProvider
+	interval         time.Duration
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	nextPoll time.Time
 }
@@ -432,9 +439,10 @@ type DiscoveryGenerator struct {
 // NewDiscoveryGenerator creates a DiscoveryGenerator.
 func NewDiscoveryGenerator(cfg DiscoveryGeneratorConfig) *DiscoveryGenerator {
 	return &DiscoveryGenerator{
-		discovery: cfg.Discovery,
-		interval:  cfg.Interval,
-		logger:    cfg.Logger,
+		discovery:        cfg.Discovery,
+		interval:         cfg.Interval,
+		logger:           cfg.Logger,
+		collectorMetrics: cfg.CollectorMetrics,
 	}
 }
 
@@ -453,6 +461,8 @@ func (g *DiscoveryGenerator) Poll(now time.Time) []types.WorkItem {
 	}
 
 	g.nextPoll = now.Add(g.interval)
+	g.collectorMetrics.IncrCounter("collector_items_generated_total",
+		map[string]string{"generator": "discovery"})
 
 	return []types.WorkItem{{
 		ID:       "discovery",

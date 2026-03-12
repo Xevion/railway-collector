@@ -62,15 +62,16 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	}
 
 	items := pollCoverageGaps(now, gapPollParams{
-		store:           g.store,
-		discovery:       g.discovery,
-		logger:          g.logger,
-		metricRetention: g.metricRetention,
-		chunkSize:       g.chunkSize,
-		maxItemsPerPoll: g.maxItemsPerPoll,
-		nextPoll:        g.nextPoll,
-		itemsPerEmit:    1,
-		logPrefix:       "service metric",
+		store:            g.store,
+		discovery:        g.discovery,
+		logger:           g.logger,
+		metricRetention:  g.metricRetention,
+		chunkSize:        g.chunkSize,
+		maxItemsPerPoll:  g.maxItemsPerPoll,
+		nextPoll:         g.nextPoll,
+		collectorMetrics: g.collectorMetrics,
+		itemsPerEmit:     1,
+		logPrefix:        "service metric",
 		entities: func(targets []types.ServiceTarget) []pollEntity {
 			svcEnvs := uniqueServiceEnvironments(targets)
 			entities := make([]pollEntity, len(svcEnvs))
@@ -113,6 +114,8 @@ func (g *ServiceMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
+		g.collectorMetrics.IncrCounter("collector_items_generated_total",
+			map[string]string{"generator": "service_metrics"})
 	}
 
 	return items
@@ -137,6 +140,8 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 			"service", serviceName, "service_id", serviceID,
 			"environment", environmentName, "environment_id", environmentID,
 			"error", err)
+		g.collectorMetrics.IncrCounter("collector_errors_total",
+			map[string]string{"component": "generator", "kind": "delivery"})
 		return
 	}
 
@@ -204,4 +209,6 @@ func (g *ServiceMetricsGenerator) Deliver(ctx context.Context, item types.WorkIt
 
 	// Write to sinks
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "metric", "query_kind": string(item.Kind)})
 }

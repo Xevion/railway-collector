@@ -42,16 +42,17 @@ type rawHttpStatusSample struct {
 
 // HttpMetricsGeneratorConfig configures an HttpMetricsGenerator.
 type HttpMetricsGeneratorConfig struct {
-	Discovery       types.TargetProvider
-	Store           types.StateStore
-	Sinks           []sink.Sink
-	Clock           clockwork.Clock
-	Interval        time.Duration // minimum time between polls
-	MetricRetention time.Duration // how far back to scan for gaps
-	ChunkSize       time.Duration // chunk size for older gaps
-	MaxItemsPerPoll int           // max work items to emit per poll
-	StepSeconds     int           // step size for HTTP metric queries (default 60)
-	Logger          *slog.Logger
+	Discovery        types.TargetProvider
+	Store            types.StateStore
+	Sinks            []sink.Sink
+	Clock            clockwork.Clock
+	Interval         time.Duration // minimum time between polls
+	MetricRetention  time.Duration // how far back to scan for gaps
+	ChunkSize        time.Duration // chunk size for older gaps
+	MaxItemsPerPoll  int           // max work items to emit per poll
+	StepSeconds      int           // step size for HTTP metric queries (default 60)
+	Logger           *slog.Logger
+	CollectorMetrics *CollectorMetrics
 }
 
 // HttpMetricsGenerator implements TaskGenerator for HTTP request metrics.
@@ -59,16 +60,17 @@ type HttpMetricsGeneratorConfig struct {
 // percentiles (httpDurationMetrics) and one for status code counts
 // (httpMetricsGroupedByStatus).
 type HttpMetricsGenerator struct {
-	discovery       types.TargetProvider
-	store           types.StateStore
-	sinks           []sink.Sink
-	clock           clockwork.Clock
-	interval        time.Duration
-	metricRetention time.Duration
-	chunkSize       time.Duration
-	maxItemsPerPoll int
-	stepSeconds     int
-	logger          *slog.Logger
+	discovery        types.TargetProvider
+	store            types.StateStore
+	sinks            []sink.Sink
+	clock            clockwork.Clock
+	interval         time.Duration
+	metricRetention  time.Duration
+	chunkSize        time.Duration
+	maxItemsPerPoll  int
+	stepSeconds      int
+	logger           *slog.Logger
+	collectorMetrics *CollectorMetrics
 
 	nextPoll time.Time
 }
@@ -96,16 +98,17 @@ func NewHttpMetricsGenerator(cfg HttpMetricsGeneratorConfig) *HttpMetricsGenerat
 	}
 
 	return &HttpMetricsGenerator{
-		discovery:       cfg.Discovery,
-		store:           cfg.Store,
-		sinks:           cfg.Sinks,
-		clock:           cfg.Clock,
-		interval:        cfg.Interval,
-		metricRetention: cfg.MetricRetention,
-		chunkSize:       cfg.ChunkSize,
-		maxItemsPerPoll: cfg.MaxItemsPerPoll,
-		stepSeconds:     cfg.StepSeconds,
-		logger:          cfg.Logger,
+		discovery:        cfg.Discovery,
+		store:            cfg.Store,
+		sinks:            cfg.Sinks,
+		clock:            cfg.Clock,
+		interval:         cfg.Interval,
+		metricRetention:  cfg.MetricRetention,
+		chunkSize:        cfg.ChunkSize,
+		maxItemsPerPoll:  cfg.MaxItemsPerPoll,
+		stepSeconds:      cfg.StepSeconds,
+		logger:           cfg.Logger,
+		collectorMetrics: cfg.CollectorMetrics,
 	}
 }
 
@@ -141,15 +144,16 @@ func (g *HttpMetricsGenerator) statusBatchKeyLive() string {
 // two WorkItems per target: one for duration percentiles, one for status counts.
 func (g *HttpMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 	items := pollCoverageGaps(now, gapPollParams{
-		store:           g.store,
-		discovery:       g.discovery,
-		logger:          g.logger,
-		metricRetention: g.metricRetention,
-		chunkSize:       g.chunkSize,
-		maxItemsPerPoll: g.maxItemsPerPoll,
-		nextPoll:        g.nextPoll,
-		itemsPerEmit:    2,
-		logPrefix:       "http metric",
+		store:            g.store,
+		discovery:        g.discovery,
+		logger:           g.logger,
+		metricRetention:  g.metricRetention,
+		chunkSize:        g.chunkSize,
+		maxItemsPerPoll:  g.maxItemsPerPoll,
+		nextPoll:         g.nextPoll,
+		collectorMetrics: g.collectorMetrics,
+		itemsPerEmit:     2,
+		logPrefix:        "http metric",
 		entities: func(targets []types.ServiceTarget) []pollEntity {
 			svcEnvs := uniqueServiceEnvironments(targets)
 			entities := make([]pollEntity, len(svcEnvs))
@@ -213,6 +217,8 @@ func (g *HttpMetricsGenerator) Poll(now time.Time) []types.WorkItem {
 
 	if len(items) > 0 {
 		g.nextPoll = now.Add(g.interval)
+		g.collectorMetrics.IncrCounter("collector_items_generated_total",
+			map[string]string{"generator": "http_metrics"})
 	}
 
 	return items
@@ -237,6 +243,8 @@ func (g *HttpMetricsGenerator) Deliver(ctx context.Context, item types.WorkItem,
 			"service", serviceName, "service_id", serviceID,
 			"environment", environmentName, "environment_id", environmentID,
 			"error", err)
+		g.collectorMetrics.IncrCounter("collector_errors_total",
+			map[string]string{"component": "generator", "kind": "delivery"})
 		return
 	}
 
@@ -326,6 +334,8 @@ func (g *HttpMetricsGenerator) deliverDuration(
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "metric", "query_kind": string(item.Kind)})
 }
 
 // deliverStatus handles types.QueryHttpMetricsGroupedByStatus responses.
@@ -381,4 +391,6 @@ func (g *HttpMetricsGenerator) deliverStatus(
 	)
 
 	writeMetricsToSinks(ctx, g.sinks, points, g.logger)
+	g.collectorMetrics.IncrCounter("collector_points_collected_total",
+		map[string]string{"type": "metric", "query_kind": string(item.Kind)})
 }

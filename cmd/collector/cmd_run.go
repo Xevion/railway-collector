@@ -137,16 +137,20 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	}
 	logger.Info("state store opened", "path", cfg.State.Path)
 
+	// Initialize self-metrics collector
+	cm := collector.NewCollectorMetrics()
+
 	// Initialize discovery with caching
 	discovery := collector.NewDiscovery(collector.DiscoveryConfig{
-		Client:       client,
-		Store:        store,
-		Clock:        clockwork.NewRealClock(),
-		Filters:      cfg.Filters,
-		Workspaces:   workspaces,
-		WorkspaceTTL: cfg.Collect.Discovery.WorkspaceTTL,
-		Jitter:       cfg.Collect.Discovery.Jitter,
-		Logger:       logger,
+		Client:           client,
+		Store:            store,
+		Clock:            clockwork.NewRealClock(),
+		Filters:          cfg.Filters,
+		Workspaces:       workspaces,
+		WorkspaceTTL:     cfg.Collect.Discovery.WorkspaceTTL,
+		Jitter:           cfg.Collect.Discovery.Jitter,
+		Logger:           logger,
+		CollectorMetrics: cm,
 	})
 	if err := discovery.Refresh(ctx); err != nil {
 		logger.Error("initial discovery failed", "workspaces", len(workspaces), "error", err)
@@ -168,18 +172,19 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	if cfg.Collect.Metrics.Enabled {
 		generators = append(generators, collector.NewProjectMetricsGenerator(collector.ProjectMetricsGeneratorConfig{
 			BaseMetricsConfig: collector.BaseMetricsConfig{
-				Discovery:       discovery,
-				Store:           store,
-				Sinks:           sinks,
-				Clock:           realClock,
-				Measurements:    measurements,
-				SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-				AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-				Interval:        cfg.Collect.Metrics.Interval,
-				MetricRetention: cfg.Collect.GapFill.MetricRetention,
-				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-				Logger:          logger,
+				Discovery:        discovery,
+				Store:            store,
+				Sinks:            sinks,
+				Clock:            realClock,
+				Measurements:     measurements,
+				SampleRate:       cfg.Collect.Metrics.SampleRateSeconds,
+				AvgWindow:        cfg.Collect.Metrics.AveragingWindowSeconds,
+				Interval:         cfg.Collect.Metrics.Interval,
+				MetricRetention:  cfg.Collect.GapFill.MetricRetention,
+				ChunkSize:        cfg.Collect.GapFill.MetricChunkSize,
+				MaxItemsPerPoll:  cfg.Collect.GapFill.MaxItemsPerPoll,
+				Logger:           logger,
+				CollectorMetrics: cm,
 			},
 		}))
 
@@ -188,18 +193,19 @@ func (cmd *RunCmd) Run(c *CLI) error {
 			svcMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Service.Measurements)
 			generators = append(generators, collector.NewServiceMetricsGenerator(collector.ServiceMetricsGeneratorConfig{
 				BaseMetricsConfig: collector.BaseMetricsConfig{
-					Discovery:       discovery,
-					Store:           store,
-					Sinks:           sinks,
-					Clock:           realClock,
-					Measurements:    svcMeasurements,
-					SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-					AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-					Interval:        cfg.Collect.Metrics.Interval,
-					MetricRetention: cfg.Collect.GapFill.MetricRetention,
-					ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-					MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-					Logger:          logger,
+					Discovery:        discovery,
+					Store:            store,
+					Sinks:            sinks,
+					Clock:            realClock,
+					Measurements:     svcMeasurements,
+					SampleRate:       cfg.Collect.Metrics.SampleRateSeconds,
+					AvgWindow:        cfg.Collect.Metrics.AveragingWindowSeconds,
+					Interval:         cfg.Collect.Metrics.Interval,
+					MetricRetention:  cfg.Collect.GapFill.MetricRetention,
+					ChunkSize:        cfg.Collect.GapFill.MetricChunkSize,
+					MaxItemsPerPoll:  cfg.Collect.GapFill.MaxItemsPerPoll,
+					Logger:           logger,
+					CollectorMetrics: cm,
 				},
 			}))
 		}
@@ -209,18 +215,19 @@ func (cmd *RunCmd) Run(c *CLI) error {
 			replicaMeasurements := collector.ResolveMeasurements(cfg.Collect.Metrics.Replica.Measurements)
 			generators = append(generators, collector.NewReplicaMetricsGenerator(collector.ReplicaMetricsGeneratorConfig{
 				BaseMetricsConfig: collector.BaseMetricsConfig{
-					Discovery:       discovery,
-					Store:           store,
-					Sinks:           sinks,
-					Clock:           realClock,
-					Measurements:    replicaMeasurements,
-					SampleRate:      cfg.Collect.Metrics.SampleRateSeconds,
-					AvgWindow:       cfg.Collect.Metrics.AveragingWindowSeconds,
-					Interval:        cfg.Collect.Metrics.Interval,
-					MetricRetention: cfg.Collect.GapFill.MetricRetention,
-					ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-					MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-					Logger:          logger,
+					Discovery:        discovery,
+					Store:            store,
+					Sinks:            sinks,
+					Clock:            realClock,
+					Measurements:     replicaMeasurements,
+					SampleRate:       cfg.Collect.Metrics.SampleRateSeconds,
+					AvgWindow:        cfg.Collect.Metrics.AveragingWindowSeconds,
+					Interval:         cfg.Collect.Metrics.Interval,
+					MetricRetention:  cfg.Collect.GapFill.MetricRetention,
+					ChunkSize:        cfg.Collect.GapFill.MetricChunkSize,
+					MaxItemsPerPoll:  cfg.Collect.GapFill.MaxItemsPerPoll,
+					Logger:           logger,
+					CollectorMetrics: cm,
 				},
 			}))
 		}
@@ -228,41 +235,44 @@ func (cmd *RunCmd) Run(c *CLI) error {
 		// HTTP metrics
 		if cfg.Collect.Metrics.HTTP.Enabled {
 			generators = append(generators, collector.NewHttpMetricsGenerator(collector.HttpMetricsGeneratorConfig{
-				Discovery:       discovery,
-				Store:           store,
-				Sinks:           sinks,
-				Clock:           realClock,
-				StepSeconds:     cfg.Collect.Metrics.HTTP.StepSeconds,
-				Interval:        cfg.Collect.Metrics.Interval,
-				MetricRetention: cfg.Collect.GapFill.MetricRetention,
-				ChunkSize:       cfg.Collect.GapFill.MetricChunkSize,
-				MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-				Logger:          logger,
+				Discovery:        discovery,
+				Store:            store,
+				Sinks:            sinks,
+				Clock:            realClock,
+				StepSeconds:      cfg.Collect.Metrics.HTTP.StepSeconds,
+				Interval:         cfg.Collect.Metrics.Interval,
+				MetricRetention:  cfg.Collect.GapFill.MetricRetention,
+				ChunkSize:        cfg.Collect.GapFill.MetricChunkSize,
+				MaxItemsPerPoll:  cfg.Collect.GapFill.MaxItemsPerPoll,
+				Logger:           logger,
+				CollectorMetrics: cm,
 			}))
 		}
 	}
 
 	if cfg.Collect.Logs.Enabled {
 		generators = append(generators, collector.NewLogsGenerator(collector.LogsGeneratorConfig{
-			Discovery:       discovery,
-			Store:           store,
-			Sinks:           sinks,
-			Clock:           realClock,
-			Types:           cfg.Collect.Logs.Types,
-			Limit:           cfg.Collect.Logs.Limit,
-			Interval:        cfg.Collect.Logs.Interval,
-			LogRetention:    cfg.Collect.GapFill.LogRetention,
-			ChunkSize:       cfg.Collect.GapFill.LogChunkSize,
-			MaxItemsPerPoll: cfg.Collect.GapFill.MaxItemsPerPoll,
-			Logger:          logger,
+			Discovery:        discovery,
+			Store:            store,
+			Sinks:            sinks,
+			Clock:            realClock,
+			Types:            cfg.Collect.Logs.Types,
+			Limit:            cfg.Collect.Logs.Limit,
+			Interval:         cfg.Collect.Logs.Interval,
+			LogRetention:     cfg.Collect.GapFill.LogRetention,
+			ChunkSize:        cfg.Collect.GapFill.LogChunkSize,
+			MaxItemsPerPoll:  cfg.Collect.GapFill.MaxItemsPerPoll,
+			Logger:           logger,
+			CollectorMetrics: cm,
 		}))
 	}
 
 	if cfg.Collect.Discovery.RefreshEnabled {
 		generators = append(generators, collector.NewDiscoveryGenerator(collector.DiscoveryGeneratorConfig{
-			Discovery: discovery,
-			Interval:  cfg.Collect.Discovery.RefreshInterval,
-			Logger:    logger,
+			Discovery:        discovery,
+			Interval:         cfg.Collect.Discovery.RefreshInterval,
+			Logger:           logger,
+			CollectorMetrics: cm,
 		}))
 	}
 
@@ -270,12 +280,13 @@ func (cmd *RunCmd) Run(c *CLI) error {
 	if cfg.Collect.Usage.Enabled {
 		usageMeasurements := collector.ResolveMeasurements(cfg.Collect.Usage.Measurements)
 		generators = append(generators, collector.NewUsageGenerator(collector.UsageGeneratorConfig{
-			Discovery:    discovery,
-			Sinks:        sinks,
-			Clock:        realClock,
-			Measurements: usageMeasurements,
-			Interval:     cfg.Collect.Usage.Interval,
-			Logger:       logger,
+			Discovery:        discovery,
+			Sinks:            sinks,
+			Clock:            realClock,
+			Measurements:     usageMeasurements,
+			Interval:         cfg.Collect.Usage.Interval,
+			Logger:           logger,
+			CollectorMetrics: cm,
 		}))
 	}
 
@@ -297,14 +308,16 @@ func (cmd *RunCmd) Run(c *CLI) error {
 
 	// Build unified scheduler
 	scheduler := collector.NewUnifiedScheduler(collector.UnifiedSchedulerConfig{
-		Clock:        realClock,
-		API:          client,
-		Credits:      credits,
-		Generators:   generators,
-		Logger:       logger,
-		TickInterval: cfg.Collect.Scheduler.TickInterval,
-		MaxRPS:       cfg.Collect.Scheduler.MaxRPS,
-		DrainTimeout: cfg.Collect.Scheduler.DrainTimeout,
+		Clock:            realClock,
+		API:              client,
+		Credits:          credits,
+		Generators:       generators,
+		Sinks:            sinks,
+		Logger:           logger,
+		TickInterval:     cfg.Collect.Scheduler.TickInterval,
+		MaxRPS:           cfg.Collect.Scheduler.MaxRPS,
+		DrainTimeout:     cfg.Collect.Scheduler.DrainTimeout,
+		CollectorMetrics: cm,
 	})
 
 	// Two-phase shutdown driven by signal handler:
